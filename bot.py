@@ -22,7 +22,7 @@ import json
 import os
 import re
 import html
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import aiosqlite
@@ -31,14 +31,18 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ChatAction
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import (
     CallbackQuery,
     Message,
     ContentType,
     ReplyKeyboardRemove,
     InputMediaPhoto,
+    InlineKeyboardButton,
     BufferedInputFile,
+    BotCommand,
+    MenuButtonCommands
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 import gspread
@@ -57,6 +61,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GSHEET_ID = os.getenv("GSHEET_ID")
 SERVICE_ACCOUNT_JSON_PATH = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 SERVICE_ACCOUNT_INFO = os.getenv("GOOGLE_SERVICE_ACCOUNT_INFO")  # альтернатива пути
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0") or 0)
 
 if not BOT_TOKEN or not GSHEET_ID or not (SERVICE_ACCOUNT_JSON_PATH or SERVICE_ACCOUNT_INFO):
     raise RuntimeError(
@@ -76,6 +81,23 @@ def normalize_phone(text: str) -> Optional[str]:
     if len(re.sub(r"\D", "", digits)) >= 10:
         return "+" + re.sub(r"\D", "", digits)
     return None
+
+
+WEEKDAYS_RU = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+
+def parse_ddmmyyyy(s: str) -> Optional[datetime]:
+    s = extract_ddmmyyyy(s)
+    try:
+        return datetime.strptime(s, "%d.%m.%Y")
+    except Exception:
+        return None
+
+def weekday_ru_from_ddmmyyyy(s: str) -> str:
+    dt = parse_ddmmyyyy(s)
+    if not dt:
+        return ""
+    # isoweekday: Mon=1..Sun=7 -> наш индекс 0..6
+    return WEEKDAYS_RU[dt.isoweekday()-1]
 
 def extract_ddmmyyyy(s: str) -> str:
     """
@@ -265,6 +287,49 @@ class GoogleSheetsClient:
         qty_col = headers.index("Количество") + 1  # 1-based
         ws.update_cell(row_index, qty_col, new_qty)
 
+    def get_week_menu(self, start_day_str: str, days: int = 7) -> List[Dict[str, Any]]:
+        ws = self.ws_menu()
+        all_values = ws.get_all_values()
+        if not all_values:
+            return []
+        headers = all_values[0]
+        if "День" not in headers or "Блюда" not in headers:
+            return []
+
+        day_idx = headers.index("День")
+        dish_idx = headers.index("Блюда")
+
+        start_day = parse_ddmmyyyy(start_day_str) or datetime.now()
+        end_day = (start_day + timedelta(days=days - 1)).date()
+
+        items = []
+        for i in range(1, len(all_values)):
+            row = all_values[i]
+            if len(row) <= max(day_idx, dish_idx):
+                continue
+            day_cell = extract_ddmmyyyy(str(row[day_idx]))
+            dt = parse_ddmmyyyy(day_cell)
+            if not dt:
+                continue
+            if start_day.date() <= dt.date() <= end_day:
+                rec = {headers[j]: (row[j] if j < len(row) else "") for j in range(len(headers))}
+                items.append(rec)
+        # отсортируем по дате
+        items.sort(key=lambda r: parse_ddmmyyyy(str(r.get("День", ""))) or datetime.now())
+        return items
+
+    def ws_overorders(self):
+        # создай лист в таблице с названием ровно "Заказы свыше"
+        return self._sh.worksheet("Заказы свыше")
+
+    def append_overorder(self, date_str: str, user_id: int, name: str, phone: str, dish: str, address: str,
+                         timeslot: str):
+        ws = self.ws_overorders()
+        ws.append_row(
+            [date_str, str(user_id), name, phone, dish, address, timeslot],
+            value_input_option="USER_ENTERED",
+        )
+
 
 
 # Асинхронные обертки для gspread
@@ -293,6 +358,17 @@ async def sheets_get_quantity_by_row(row_index: int) -> int:
 
 async def sheets_set_quantity_by_row(row_index: int, new_qty: int):
     return await asyncio.to_thread(get_sheets_client().set_quantity_by_row, row_index, new_qty)
+
+async def sheets_get_week_menu(start_day_str: str, days: int = 7) -> List[Dict[str, Any]]:
+    return await asyncio.to_thread(get_sheets_client().get_week_menu, start_day_str, days)
+
+async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str):
+    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # адрес/время нам неизвестны на этом шаге — пишем пусто
+    await asyncio.to_thread(
+        get_sheets_client().append_overorder,
+        date_str, user_id, name, phone, dish, "", ""
+    )
 
 async def reserve_one_portion_for_today(dish_name: str) -> tuple[bool, str | None]:
     """
@@ -416,14 +492,22 @@ def kb_send_contact():
     kb.adjust(1)
     return kb.as_markup(resize_keyboard=True, one_time_keyboard=True)
 
+def kb_support():
+    kb = ReplyKeyboardBuilder()
+    kb.button(text="Связаться с нами")
+    kb.adjust(1)
+    return kb.as_markup(resize_keyboard=True, one_time_keyboard=False)
+
+
 def kb_menu_navigation(can_switch: bool, show_choose: bool = True) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     if can_switch:
         kb.button(text="◀️", callback_data="menu_prev")
     if show_choose:
-        kb.button(text="Выбрать", callback_data="menu_choose")
+        kb.button(text="Заказать", callback_data="menu_choose")
     if can_switch:
         kb.button(text="▶️", callback_data="menu_next")
+
 
     if can_switch and show_choose:
         kb.adjust(3)
@@ -431,14 +515,18 @@ def kb_menu_navigation(can_switch: bool, show_choose: bool = True) -> InlineKeyb
         kb.adjust(2)
     else:
         kb.adjust(1)
+
+    kb.row(InlineKeyboardButton(text="Посмотреть всё меню", callback_data="menu_show_week"))
+
     return kb
 
 def kb_choose_address() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     for a in ADDRESS_OPTIONS:
         kb.button(text=a, callback_data=f"addr:{a}")
+    kb.button(text="Ввести адрес", callback_data="addr_custom")
     kb.button(text="Назад", callback_data="back:menu")
-    kb.adjust(3, 1)
+    kb.adjust(3, 1, 1)  # 3 адреса, потом "Ввести адрес", потом "Назад"
     return kb
 
 def kb_choose_time() -> InlineKeyboardBuilder:
@@ -621,12 +709,44 @@ async def _edit_media_smart(msg, photo_url: str, caption: str, kb) -> bool:
             return False
     return False
 
+
+async def edit_to_text(msg: Message, text: str, reply_markup=None):
+    """
+    Если msg с фото/медиа — удалить и отправить новое текстовое.
+    Если текст — отредактировать.
+    """
+    try:
+        if getattr(msg, "photo", None) or getattr(msg, "video", None) or getattr(msg, "document", None):
+            # Редактировать text у медиа нельзя → удаляем и шлём новое
+            try:
+                await msg.bot.delete_message(msg.chat.id, msg.message_id)
+            except Exception:
+                pass
+            await msg.bot.send_message(msg.chat.id, text, reply_markup=reply_markup, parse_mode="HTML")
+        else:
+            await msg.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+    except TelegramBadRequest:
+        # Fallback
+        try:
+            await msg.bot.delete_message(msg.chat.id, msg.message_id)
+        except Exception:
+            pass
+        await msg.bot.send_message(msg.chat.id, text, reply_markup=reply_markup, parse_mode="HTML")
+
+
 async def show_menu_item(
     chat_id: int,
     user_id: int,
     edit_message: Optional[Message] = None,
     callback_query: Optional[CallbackQuery] = None
 ):
+    """
+    Карточка «меню на сегодня».
+    - Если у блюда есть фото — показываем фото + caption.
+    - Если фото нет — обычный текст.
+    - Если приходим из callback и текущее сообщение текстовое, а у блюда есть фото —
+      удаляем текст и отправляем фото (чтобы снова была карточка с изображением).
+    """
     data = await fsm.get_data(user_id)
     menu: List[Dict[str, Any]] = data.get("menu", [])
     idx: int = data.get("menu_idx", 0)
@@ -641,63 +761,86 @@ async def show_menu_item(
     qty = str(item.get("Количество", "")).strip()
     photo = str(item.get("Фото", "")).strip()
 
-    caption_lines = [f"<b>Блюдо дня</b>: {h(dish_name)}"]
+    caption_lines = [f"<b>Блюдо дня</b>:\n{h(dish_name)}"]
     if qty:
         caption_lines.append(f"Доступно: {h(qty)}")
-    caption = "\n".join(caption_lines)
+    text_or_caption = "\n".join(caption_lines)
 
     can_switch = len(menu) > 1
     kb = kb_menu_navigation(can_switch=can_switch, show_choose=True).as_markup()
 
-    # ✅ chat_action: если есть фото — UPLOAD_PHOTO, иначе TYPING
-    try:
-        await bot.send_chat_action(chat_id, ChatAction.UPLOAD_PHOTO if photo else ChatAction.TYPING)
-    except Exception:
-        pass
-
-    # дальше — твоя логика отправки/редактирования (из предыдущей версии)
+    # Первый показ (после /start или после успешной регистрации)
     if not callback_query:
-        await _safe_send_photo_or_text(chat_id, photo, caption, kb)
+        try:
+            await bot.send_chat_action(chat_id, ChatAction.UPLOAD_PHOTO if photo else ChatAction.TYPING)
+        except Exception:
+            pass
+        if photo:
+            await _safe_send_photo_or_text(chat_id, photo, text_or_caption, kb)
+        else:
+            await bot.send_message(chat_id, text_or_caption, reply_markup=kb, parse_mode="HTML")
         return
 
+    # Пришли из callback — нужно «привести» текущее сообщение к нужному виду
     msg = callback_query.message
+
     try:
         if photo:
             if msg.photo:
-                ok = await _edit_media_smart(msg, photo, caption, kb)
+                # Было фото → меняем медиа/подпись
+                ok = await _edit_media_smart(msg, photo, text_or_caption, kb)
                 if not ok:
                     try:
                         await bot.delete_message(msg.chat.id, msg.message_id)
                     except Exception:
                         pass
-                    await _safe_send_photo_or_text(chat_id, photo, caption, kb)
+                    await _safe_send_photo_or_text(chat_id, photo, text_or_caption, kb)
             else:
+                # Был текст (например, после недельного меню) → удаляем и шлём фото
                 try:
                     await bot.delete_message(msg.chat.id, msg.message_id)
                 except Exception:
                     pass
-                await _safe_send_photo_or_text(chat_id, photo, caption, kb)
+                await _safe_send_photo_or_text(chat_id, photo, text_or_caption, kb)
         else:
+            # Фото нет → должна быть текстовая карточка
             if msg.photo:
                 try:
                     await bot.delete_message(msg.chat.id, msg.message_id)
                 except Exception:
                     pass
-                await bot.send_message(chat_id, caption, reply_markup=kb, disable_web_page_preview=True)
+                await bot.send_message(chat_id, text_or_caption, reply_markup=kb, parse_mode="HTML")
             else:
                 try:
-                    await msg.edit_text(caption, reply_markup=kb, disable_web_page_preview=True)
+                    await msg.edit_text(text_or_caption, reply_markup=kb, parse_mode="HTML")
                 except TelegramBadRequest as e:
-                    if "message is not modified" in str(e).lower():
-                        pass
-                    else:
-                        await bot.send_message(chat_id, caption, reply_markup=kb, disable_web_page_preview=True)
+                    if "message is not modified" not in str(e).lower():
+                        await bot.send_message(chat_id, text_or_caption, reply_markup=kb, parse_mode="HTML")
     finally:
-        if callback_query:
-            await callback_query.answer()
+        await callback_query.answer()
+
 
 
 # ---------- Хэндлеры ----------
+
+@router.message(Command("menu"))
+async def cmd_menu(message: Message):
+    user = message.from_user
+    if not user:
+        return
+    uid = user.id
+    # Переведём FSM в состояние "menu" и покажем меню
+    await fsm.set_state(uid, "menu")
+    await send_today_menu(message.chat.id, uid)
+
+@router.message(Command("support"))
+async def cmd_support(message: Message):
+    uid = message.from_user.id
+    await fsm.set_state(uid, "awaiting_support_message")
+    await message.answer(
+        "Опиши, пожалуйста, вопрос одним сообщением — я перешлю его оператору.\n\n"
+        "Чтобы отменить — отправь /menu."
+    )
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -710,6 +853,47 @@ async def text_handler(message: Message):
         return
     uid = user.id
     state = await fsm.get_state(uid)
+
+    # пользователь пишет в поддержку
+    if state == "awaiting_support_message":
+        if ADMIN_CHAT_ID:
+            kb = InlineKeyboardBuilder()
+            kb.button(text="Ответить", callback_data=f"support_reply:{uid}")
+
+            admin_text = (
+                f"📬 <b>Новое сообщение от пользователя</b>\n"
+                f"ID: <code>{uid}</code>\n"
+                f"Username: @{user.username or '-'}\n"
+                f"Имя: {h(user.full_name or '-')}\n\n"
+                f"{h(message.text)}"
+            )
+            try:
+                await bot.send_message(ADMIN_CHAT_ID, admin_text, reply_markup=kb.as_markup(), parse_mode="HTML")
+            except Exception:
+                # если админ не нажал Start боту — сюда попадём
+                pass
+        await message.answer("Спасибо! Сообщение передано оператору.")
+        await fsm.set_state(uid, "menu")
+        return
+
+    # админ отвечает
+    if ADMIN_CHAT_ID and uid == ADMIN_CHAT_ID:
+        admin_state = await fsm.get_state(ADMIN_CHAT_ID)
+        if admin_state == "awaiting_support_reply":
+            data_admin = await fsm.get_data(ADMIN_CHAT_ID)
+            target = data_admin.get("reply_target")
+            if target:
+                try:
+                    await bot.send_message(
+                        target,
+                        f"📩 <b>Ответ от тех.поддержки</b>:\n{h(message.text)}",
+                        parse_mode="HTML"
+                    )
+                    await message.answer("Ответ отправлен пользователю ✅")
+                except Exception:
+                    await message.answer("Не удалось отправить ответ пользователю. Возможно, он ещё не начинал диалог с ботом.")
+            await fsm.set_state(ADMIN_CHAT_ID, None)
+            return
 
     # Ожидаем имя при регистрации
     if state == "awaiting_name":
@@ -739,12 +923,31 @@ async def text_handler(message: Message):
         await fsm.update_data(uid, phone=phone)  # сохраним локально
         # Уберем клавиатуру
         await message.answer("Спасибо! Регистрация завершена ✅", reply_markup=ReplyKeyboardRemove())
-        await send_today_menu(message.chat.id, uid)
+        await send_today_menu(message.chat.id, uid, reply_markup=None)
+        return
+
+    if state == "awaiting_custom_address":
+        addr = message.text.strip()
+        if len(addr) < 5:
+            await message.answer("Слишком короткий адрес. Введи адрес подробнее, пожалуйста.")
+            return
+        await fsm.update_data(uid, chosen_address=addr)
+        await fsm.set_state(uid, "choose_time")
+        kb = kb_choose_time().as_markup()
+        await message.answer(f"Адрес доставки: <b>{h(addr)}</b>\n\nТеперь выбери время доставки:", reply_markup=kb, parse_mode="HTML")
         return
 
     # По умолчанию — если уже зарегистрирован, но пользователь пишет текст
     if state in (None, "menu", "choose_address", "choose_time", "confirm"):
         await message.answer("Воспользуйся, пожалуйста, кнопками ниже 🙂")
+
+@router.message(Command("support"))
+@router.message(F.text.casefold() == "связаться с нами")
+async def msg_support_entry(message: Message):
+    uid = message.from_user.id
+    await fsm.set_state(uid, "awaiting_support_message")
+    await message.answer("Опиши, пожалуйста, вопрос одним сообщением — я перешлю его оператору.")
+
 
 @router.message(F.content_type == ContentType.CONTACT)
 async def contact_handler(message: Message):
@@ -765,7 +968,7 @@ async def contact_handler(message: Message):
     await sheets_add_client(uid, name, username, phone)
     await fsm.set_state(uid, "menu")
     await fsm.update_data(uid, phone=phone)
-    await message.answer("Спасибо! Регистрация завершена ✅", reply_markup=None)
+    await message.answer("Спасибо! Регистрация завершена ✅", reply_markup=ReplyKeyboardRemove())
     await send_today_menu(message.chat.id, uid)
 
 # ---- CallbackQuery: меню навигация и выбор ----
@@ -817,7 +1020,13 @@ async def cb_menu_choose(call: CallbackQuery):
         return await call.answer("Позиция меню не найдена.", show_alert=True)
     qty = await sheets_get_quantity_by_row(row_index)
     if qty <= 0:
-        return await call.answer("Увы, это блюдо уже закончилось.", show_alert=True)
+        client = await sheets_find_client(uid)
+        if client:
+            name = str(client.get("Имя", "")).strip()
+            phone = str(client.get("Номер телефона", "")).strip()
+            await sheets_append_overorder(uid, name, phone, dish)
+        return await call.answer("Увы, это блюдо уже закончилось на сегодня",
+                                 show_alert=True)
 
     # Сохраняем выбор
     await fsm.update_data(uid, chosen_dish=dish)
@@ -1023,7 +1232,77 @@ async def cb_back(call: CallbackQuery):
 async def cb_show_menu_again(call: CallbackQuery):
     uid = call.from_user.id
     await fsm.set_state(uid, "menu")
-    await send_today_menu(call.message.chat.id, uid)
+    # отрисуем текущую карточку В ЭТОМ ЖЕ сообщении
+    await show_menu_item(call.message.chat.id, uid, callback_query=call)
+
+
+@router.callback_query(F.data == "menu_show_week")
+async def cb_menu_show_week(call: CallbackQuery):
+    # берём «сегодня» как старт
+    start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    items = await sheets_get_week_menu(start, days=7)
+    if not items:
+        await call.answer("Меню на неделю отсутствует", show_alert=True)
+        return
+
+    lines = []
+    for it in items:
+        day = extract_ddmmyyyy(str(it.get("День", "")))
+        wd = weekday_ru_from_ddmmyyyy(day)
+        dish = str(it.get("Блюда", "")).strip()
+        lines.append(f"{day} ({wd}): {h(dish)}")
+
+    text = "<b>Меню на неделю</b>:\n" + "\n".join(lines)
+
+    # Клавиатура: кнопка «Назад»
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад к сегодняшнему меню", callback_data="show_menu_again")
+    # редактируем текущее сообщение → текст
+    await edit_to_text(call.message, text, reply_markup=kb.as_markup())
+    await call.answer()
+
+@router.callback_query(F.data == "addr_custom")
+async def cb_addr_custom(call: CallbackQuery):
+    uid = call.from_user.id
+    await fsm.set_state(uid, "awaiting_custom_address")
+
+    # Кнопка «Назад» из режима ввода — вернёт на выбор адресов
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад", callback_data="back:addr")
+    kb = kb.as_markup()
+
+    try:
+        await call.message.edit_text("Пожалуйста, введи адрес доставки текстом одним сообщением.", reply_markup=kb)
+    except TelegramBadRequest:
+        try:
+            await bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        await bot.send_message(call.message.chat.id, "Пожалуйста, введи адрес доставки текстом одним сообщением.", reply_markup=kb)
+    await call.answer()
+
+@router.callback_query(F.data.startswith("support_reply:"))
+async def cb_support_reply(call: CallbackQuery):
+    # только админ
+    if not ADMIN_CHAT_ID or call.from_user.id != ADMIN_CHAT_ID:
+        return await call.answer("Нет прав", show_alert=True)
+
+    target_user_id = int(call.data.split(":", 1)[1])
+
+    # у админа в FSM сохраним, кому отвечаем
+    await fsm.set_state(ADMIN_CHAT_ID, "awaiting_support_reply")
+    await fsm.update_data(ADMIN_CHAT_ID, reply_target=target_user_id)
+
+    # уберём кнопку у этого сообщения, чтобы не нажимали повторно
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await call.message.answer(
+        f"Напишите ответ для пользователя <code>{target_user_id}</code> одним сообщением.",
+        parse_mode="HTML"
+    )
     await call.answer()
 
 
@@ -1031,8 +1310,19 @@ async def cb_show_menu_again(call: CallbackQuery):
 
 async def on_startup():
     await fsm.init()
-    # Прогреем клиент Google Sheets в отдельном потоке
     await asyncio.to_thread(get_sheets_client)
+
+    # Команды, которые увидит пользователь в синей кнопке «Меню»
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Начать / регистрация"),
+        BotCommand(command="menu", description="Показать меню на сегодня"),
+        BotCommand(command="support", description="Связаться с нами"),
+    ])
+    # Явно выставим тип меню как Commands (на всякий случай)
+    try:
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    except Exception:
+        pass
 
 async def main():
     await on_startup()
