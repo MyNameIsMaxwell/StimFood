@@ -69,6 +69,7 @@ if not BOT_TOKEN or not GSHEET_ID or not (SERVICE_ACCOUNT_JSON_PATH or SERVICE_A
         "и GOOGLE_SERVICE_ACCOUNT_JSON (или GOOGLE_SERVICE_ACCOUNT_INFO)."
     )
 
+
 # ---------- Утилиты ----------
 
 def normalize_phone(text: str) -> Optional[str]:
@@ -85,6 +86,7 @@ def normalize_phone(text: str) -> Optional[str]:
 
 WEEKDAYS_RU = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
 
+
 def parse_ddmmyyyy(s: str) -> Optional[datetime]:
     s = extract_ddmmyyyy(s)
     try:
@@ -92,12 +94,14 @@ def parse_ddmmyyyy(s: str) -> Optional[datetime]:
     except Exception:
         return None
 
+
 def weekday_ru_from_ddmmyyyy(s: str) -> str:
     dt = parse_ddmmyyyy(s)
     if not dt:
         return ""
     # isoweekday: Mon=1..Sun=7 -> наш индекс 0..6
-    return WEEKDAYS_RU[dt.isoweekday()-1]
+    return WEEKDAYS_RU[dt.isoweekday() - 1]
+
 
 def extract_ddmmyyyy(s: str) -> str:
     """
@@ -127,8 +131,10 @@ def extract_ddmmyyyy(s: str) -> str:
     # фоллбэк: сегодня
     return datetime.now().strftime("%d.%m.%Y")
 
+
 def h(s: str) -> str:
     return html.escape(s or "", quote=False)
+
 
 # ---------- Google Sheets клиент (синхронный gspread вызываем через asyncio.to_thread) ----------
 
@@ -211,14 +217,14 @@ class GoogleSheetsClient:
 
     # ---- Операции с заказами ----
     def append_order(
-        self,
-        date_str: str,
-        user_id: int,
-        name: str,
-        phone: str,
-        dish: str,
-        address: str,
-        timeslot: str,
+            self,
+            date_str: str,
+            user_id: int,
+            name: str,
+            phone: str,
+            dish: str,
+            address: str,
+            timeslot: str,
     ):
         ws = self.ws_orders()
         ws.append_row(
@@ -264,7 +270,8 @@ class GoogleSheetsClient:
             row = all_values[i]
             if len(row) <= max(day_col, dish_col):
                 continue
-            if str(row[day_col]).strip() == str(day_name).strip() and str(row[dish_col]).strip() == str(dish_name).strip():
+            if str(row[day_col]).strip() == str(day_name).strip() and str(row[dish_col]).strip() == str(
+                    dish_name).strip():
                 # собираем record по заголовкам (безопасно)
                 record = {headers[j]: (row[j] if j < len(row) else "") for j in range(len(headers))}
                 # индекс строки для gspread 1-based → i+1
@@ -331,9 +338,9 @@ class GoogleSheetsClient:
         )
 
 
-
 # Асинхронные обертки для gspread
 _sheets_client: Optional[GoogleSheetsClient] = None
+
 
 def get_sheets_client() -> GoogleSheetsClient:
     global _sheets_client
@@ -341,26 +348,34 @@ def get_sheets_client() -> GoogleSheetsClient:
         _sheets_client = GoogleSheetsClient(GSHEET_ID)
     return _sheets_client
 
+
 async def sheets_find_client(telegram_id: int) -> Optional[Dict[str, Any]]:
     return await asyncio.to_thread(get_sheets_client().find_client, telegram_id)
+
 
 async def sheets_add_client(telegram_id: int, name: str, username: str, phone: str):
     await asyncio.to_thread(get_sheets_client().add_client, telegram_id, name, username, phone)
 
+
 async def sheets_get_menu(day_name: str) -> List[Dict[str, Any]]:
     return await asyncio.to_thread(get_sheets_client().get_menu_for_day, day_name)
+
 
 async def sheets_find_menu_row(day_name: str, dish_name: str):
     return await asyncio.to_thread(get_sheets_client().find_menu_row_by_day_and_dish, day_name, dish_name)
 
+
 async def sheets_get_quantity_by_row(row_index: int) -> int:
     return await asyncio.to_thread(get_sheets_client().get_quantity_by_row, row_index)
+
 
 async def sheets_set_quantity_by_row(row_index: int, new_qty: int):
     return await asyncio.to_thread(get_sheets_client().set_quantity_by_row, row_index, new_qty)
 
+
 async def sheets_get_week_menu(start_day_str: str, days: int = 7) -> List[Dict[str, Any]]:
     return await asyncio.to_thread(get_sheets_client().get_week_menu, start_day_str, days)
+
 
 async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str):
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -369,6 +384,7 @@ async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str
         get_sheets_client().append_overorder,
         date_str, user_id, name, phone, dish, "", ""
     )
+
 
 async def reserve_one_portion_for_today(dish_name: str) -> tuple[bool, str | None]:
     """
@@ -388,6 +404,7 @@ async def reserve_one_portion_for_today(dish_name: str) -> tuple[bool, str | Non
     await sheets_set_quantity_by_row(row_index, current - 1)
     return True, None
 
+
 async def release_one_portion_for_today(dish_name: str):
     day = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     row_index, record = await sheets_find_menu_row(day, dish_name)
@@ -399,12 +416,12 @@ async def release_one_portion_for_today(dish_name: str):
 
 
 async def sheets_append_order(
-    user_id: int,
-    name: str,
-    phone: str,
-    dish: str,
-    address: str,
-    timeslot: str,
+        user_id: int,
+        name: str,
+        phone: str,
+        dish: str,
+        address: str,
+        timeslot: str,
 ):
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     await asyncio.to_thread(
@@ -412,10 +429,12 @@ async def sheets_append_order(
         date_str, user_id, name, phone, dish, address, timeslot
     )
 
+
 # ---------- SQLite FSM ----------
 
 class FSMStorage:
     """Простейшее хранилище состояний в SQLite: state (TEXT) + data (JSON)."""
+
     def __init__(self, db_path: str):
         self.db_path = db_path
 
@@ -475,6 +494,7 @@ class FSMStorage:
             await db.execute("DELETE FROM fsm_states WHERE user_id = ?", (user_id,))
             await db.commit()
 
+
 fsm = FSMStorage(DB_PATH)
 
 # ---------- Телеграм-бот ----------
@@ -484,6 +504,7 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
+
 # ---- Клавиатуры ----
 
 def kb_send_contact():
@@ -491,6 +512,7 @@ def kb_send_contact():
     kb.button(text="Поделиться контактом", request_contact=True)
     kb.adjust(1)
     return kb.as_markup(resize_keyboard=True, one_time_keyboard=True)
+
 
 def kb_support():
     kb = ReplyKeyboardBuilder()
@@ -508,7 +530,6 @@ def kb_menu_navigation(can_switch: bool, show_choose: bool = True) -> InlineKeyb
     if can_switch:
         kb.button(text="▶️", callback_data="menu_next")
 
-
     if can_switch and show_choose:
         kb.adjust(3)
     elif can_switch or show_choose:
@@ -520,6 +541,7 @@ def kb_menu_navigation(can_switch: bool, show_choose: bool = True) -> InlineKeyb
 
     return kb
 
+
 def kb_choose_address() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     for a in ADDRESS_OPTIONS:
@@ -529,6 +551,7 @@ def kb_choose_address() -> InlineKeyboardBuilder:
     kb.adjust(3, 1, 1)  # 3 адреса, потом "Ввести адрес", потом "Назад"
     return kb
 
+
 def kb_choose_time() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     for t in TIME_SLOTS:
@@ -537,18 +560,25 @@ def kb_choose_time() -> InlineKeyboardBuilder:
     kb.adjust(2, 1)
     return kb
 
-def kb_confirm() -> InlineKeyboardBuilder:
+
+def kb_confirm(payment_url: str | None = None) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Всё верно", callback_data="confirm")
-    kb.button(text="Назад", callback_data="back:time")
-    kb.adjust(1, 1)
+
+    kb.button(text="✅ Всё верно, оплатить при получении", callback_data="confirm")
+
+    if payment_url:
+        kb.row(InlineKeyboardButton(text="💳 Всё верно, оплатить картой", url=payment_url))
+
+    kb.row(InlineKeyboardButton(text="Назад", callback_data="back:time"))
     return kb
+
 
 def kb_show_menu_again() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     kb.button(text="Посмотреть меню на сегодня", callback_data="show_menu_again")
     kb.adjust(1)
     return kb
+
 
 def normalize_photo_url(url: str) -> str:
     if not url:
@@ -583,6 +613,7 @@ async def ensure_registered_and_show_menu(message: Message):
         await fsm.update_data(uid, username=username)
         await message.answer("Привет! Давай познакомимся. Как тебя зовут? 🙂")
 
+
 async def send_today_menu(chat_id: int, user_id: int):
     today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
@@ -597,6 +628,7 @@ async def send_today_menu(chat_id: int, user_id: int):
     # Сохраним меню целиком и текущий индекс в FSM
     await show_menu_item(chat_id, user_id)
 
+
 async def fetch_bytes(url: str, timeout: int = 20) -> Optional[bytes]:
     try:
         async with aiohttp.ClientSession() as s:
@@ -606,6 +638,7 @@ async def fetch_bytes(url: str, timeout: int = 20) -> Optional[bytes]:
     except Exception:
         return None
     return None
+
 
 async def _safe_send_photo_or_text(chat_id: int, photo_url: str, caption: str, reply_markup):
     """
@@ -650,6 +683,8 @@ async def _safe_send_photo_or_text(chat_id: int, photo_url: str, caption: str, r
         reply_markup=reply_markup,
         disable_web_page_preview=True
     )
+
+
 async def edit_text_or_caption(msg, text: str, reply_markup=None, parse_mode: str | None = "HTML"):
     """
     Если msg с фото — редактируем caption, иначе text.
@@ -735,10 +770,10 @@ async def edit_to_text(msg: Message, text: str, reply_markup=None):
 
 
 async def show_menu_item(
-    chat_id: int,
-    user_id: int,
-    edit_message: Optional[Message] = None,
-    callback_query: Optional[CallbackQuery] = None
+        chat_id: int,
+        user_id: int,
+        edit_message: Optional[Message] = None,
+        callback_query: Optional[CallbackQuery] = None
 ):
     """
     Карточка «меню на сегодня».
@@ -820,7 +855,6 @@ async def show_menu_item(
         await callback_query.answer()
 
 
-
 # ---------- Хэндлеры ----------
 
 @router.message(Command("menu"))
@@ -833,18 +867,22 @@ async def cmd_menu(message: Message):
     await fsm.set_state(uid, "menu")
     await send_today_menu(message.chat.id, uid)
 
+
 @router.message(Command("support"))
 async def cmd_support(message: Message):
     uid = message.from_user.id
     await fsm.set_state(uid, "awaiting_support_message")
     await message.answer(
-        "Опиши, пожалуйста, вопрос одним сообщением — я перешлю его оператору.\n\n"
+        "Опиши, пожалуйста, вопрос одним сообщением — я перешлю его оператору.\n"
+        "Либо свяжись с нами по номеру <b>+375333777308</b>.\n\n"
         "Чтобы отменить — отправь /menu."
     )
+
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     await ensure_registered_and_show_menu(message)
+
 
 @router.message(F.content_type == ContentType.TEXT)
 async def text_handler(message: Message):
@@ -891,7 +929,8 @@ async def text_handler(message: Message):
                     )
                     await message.answer("Ответ отправлен пользователю ✅")
                 except Exception:
-                    await message.answer("Не удалось отправить ответ пользователю. Возможно, он ещё не начинал диалог с ботом.")
+                    await message.answer(
+                        "Не удалось отправить ответ пользователю. Возможно, он ещё не начинал диалог с ботом.")
             await fsm.set_state(ADMIN_CHAT_ID, None)
             return
 
@@ -934,12 +973,14 @@ async def text_handler(message: Message):
         await fsm.update_data(uid, chosen_address=addr)
         await fsm.set_state(uid, "choose_time")
         kb = kb_choose_time().as_markup()
-        await message.answer(f"Адрес доставки: <b>{h(addr)}</b>\n\nТеперь выбери время доставки:", reply_markup=kb, parse_mode="HTML")
+        await message.answer(f"Адрес доставки: <b>{h(addr)}</b>\n\nТеперь выбери время доставки:", reply_markup=kb,
+                             parse_mode="HTML")
         return
 
     # По умолчанию — если уже зарегистрирован, но пользователь пишет текст
     if state in (None, "menu", "choose_address", "choose_time", "confirm"):
         await message.answer("Воспользуйся, пожалуйста, кнопками ниже 🙂")
+
 
 @router.message(Command("support"))
 @router.message(F.text.casefold() == "связаться с нами")
@@ -971,6 +1012,7 @@ async def contact_handler(message: Message):
     await message.answer("Спасибо! Регистрация завершена ✅", reply_markup=ReplyKeyboardRemove())
     await send_today_menu(message.chat.id, uid)
 
+
 # ---- CallbackQuery: меню навигация и выбор ----
 
 @router.callback_query(F.data == "menu_prev")
@@ -986,6 +1028,7 @@ async def cb_menu_prev(call: CallbackQuery):
     idx = (data.get("menu_idx", 0) - 1) % len(menu)
     await fsm.update_data(uid, menu_idx=idx)
     await show_menu_item(call.message.chat.id, uid, callback_query=call)
+
 
 @router.callback_query(F.data == "menu_next")
 async def cb_menu_next(call: CallbackQuery):
@@ -1044,6 +1087,7 @@ async def cb_menu_choose(call: CallbackQuery):
     await bot.send_message(call.message.chat.id, text, reply_markup=kb, parse_mode="HTML")
     await call.answer()
 
+
 @router.callback_query(F.data.startswith("addr:"))
 async def cb_choose_address(call: CallbackQuery):
     user = call.from_user
@@ -1070,6 +1114,7 @@ async def cb_choose_address(call: CallbackQuery):
 
     await call.answer()
 
+
 @router.callback_query(F.data.startswith("time:"))
 async def cb_choose_time(call: CallbackQuery):
     user = call.from_user
@@ -1083,7 +1128,8 @@ async def cb_choose_time(call: CallbackQuery):
     data = await fsm.get_data(uid)
     dish = data.get("chosen_dish", "")
     address = data.get("chosen_address", "")
-    kb = kb_confirm().as_markup()
+    pay_url = f"https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-2181530393354040.005802BY5913UNP_2918581506007Belarus63044DC0"
+    kb = kb_confirm(payment_url=pay_url).as_markup()
 
     text = (
         "Проверь заказ:\n"
@@ -1103,6 +1149,7 @@ async def cb_choose_time(call: CallbackQuery):
         await bot.send_message(call.message.chat.id, text, reply_markup=kb, parse_mode="HTML")
 
     await call.answer()
+
 
 @router.callback_query(F.data == "confirm")
 async def cb_confirm(call: CallbackQuery):
@@ -1137,7 +1184,8 @@ async def cb_confirm(call: CallbackQuery):
                 await bot.delete_message(call.message.chat.id, call.message.message_id)
             except Exception:
                 pass
-            await bot.send_message(call.message.chat.id, "Ошибка профиля. Отправь /start для регистрации.", parse_mode="HTML")
+            await bot.send_message(call.message.chat.id, "Ошибка профиля. Отправь /start для регистрации.",
+                                   parse_mode="HTML")
         return
 
     name = str(client.get("Имя", "")).strip()
@@ -1150,6 +1198,17 @@ async def cb_confirm(call: CallbackQuery):
         await release_one_portion_for_today(dish)  # откат
         await call.answer("Не удалось сохранить заказ. Попробуй позже.", show_alert=True)
         return
+
+    data = await fsm.get_data(uid)
+    menu = data.get("menu", [])
+    idx = data.get("menu_idx", 0)
+    if 0 <= idx < len(menu):
+        try:
+            cur = int(str(menu[idx].get("Количество", "0")).strip() or "0")
+        except ValueError:
+            cur = 0
+        menu[idx]["Количество"] = str(max(0, cur - 1))
+        await fsm.update_data(uid, menu=menu)
 
     # Финальный текст + кнопка "Посмотреть меню на сегодня"
     text_ok = "Спасибо! Твой заказ принят ✅"
@@ -1167,6 +1226,7 @@ async def cb_confirm(call: CallbackQuery):
     await fsm.set_state(uid, "menu")
     await fsm.update_data(uid, chosen_dish=None, chosen_address=None, chosen_time=None)
     await call.answer()
+
 
 # ---- Назад ----
 
@@ -1232,7 +1292,11 @@ async def cb_back(call: CallbackQuery):
 async def cb_show_menu_again(call: CallbackQuery):
     uid = call.from_user.id
     await fsm.set_state(uid, "menu")
-    # отрисуем текущую карточку В ЭТОМ ЖЕ сообщении
+    # Обновим меню из Google Sheets, чтобы карточка была актуальной
+    today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fresh_menu = await sheets_get_menu(today)
+    await fsm.update_data(uid, menu=fresh_menu, menu_idx=0)
+    # отрисуем карточку в том же сообщении
     await show_menu_item(call.message.chat.id, uid, callback_query=call)
 
 
@@ -1250,7 +1314,7 @@ async def cb_menu_show_week(call: CallbackQuery):
         day = extract_ddmmyyyy(str(it.get("День", "")))
         wd = weekday_ru_from_ddmmyyyy(day)
         dish = str(it.get("Блюда", "")).strip()
-        lines.append(f"{day} ({wd}): {h(dish)}")
+        lines.append(f"<b>{day} ({wd}):</b> \n {h(dish)}")
 
     text = "<b>Меню на неделю</b>:\n" + "\n".join(lines)
 
@@ -1260,6 +1324,7 @@ async def cb_menu_show_week(call: CallbackQuery):
     # редактируем текущее сообщение → текст
     await edit_to_text(call.message, text, reply_markup=kb.as_markup())
     await call.answer()
+
 
 @router.callback_query(F.data == "addr_custom")
 async def cb_addr_custom(call: CallbackQuery):
@@ -1278,8 +1343,10 @@ async def cb_addr_custom(call: CallbackQuery):
             await bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        await bot.send_message(call.message.chat.id, "Пожалуйста, введи адрес доставки текстом одним сообщением.", reply_markup=kb)
+        await bot.send_message(call.message.chat.id, "Пожалуйста, введи адрес доставки текстом одним сообщением.",
+                               reply_markup=kb)
     await call.answer()
+
 
 @router.callback_query(F.data.startswith("support_reply:"))
 async def cb_support_reply(call: CallbackQuery):
@@ -1324,9 +1391,11 @@ async def on_startup():
     except Exception:
         pass
 
+
 async def main():
     await on_startup()
     await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+
 
 if __name__ == "__main__":
     try:
