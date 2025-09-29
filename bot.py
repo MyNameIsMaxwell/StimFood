@@ -337,6 +337,18 @@ class GoogleSheetsClient:
             value_input_option="USER_ENTERED",
         )
 
+    def get_all_client_chat_ids(self) -> List[int]:
+        ws = self.ws_clients()
+        ids = []
+        for row in ws.get_all_records():
+            tid = str(row.get("telegram_id", "")).strip()
+            if tid.isdigit():
+                try:
+                    ids.append(int(tid))
+                except Exception:
+                    pass
+        return ids
+
 
 # Асинхронные обертки для gspread
 _sheets_client: Optional[GoogleSheetsClient] = None
@@ -375,6 +387,9 @@ async def sheets_set_quantity_by_row(row_index: int, new_qty: int):
 
 async def sheets_get_week_menu(start_day_str: str, days: int = 7) -> List[Dict[str, Any]]:
     return await asyncio.to_thread(get_sheets_client().get_week_menu, start_day_str, days)
+
+async def sheets_get_all_client_ids() -> List[int]:
+    return await asyncio.to_thread(get_sheets_client().get_all_client_chat_ids)
 
 
 async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str):
@@ -501,6 +516,7 @@ fsm = FSMStorage(DB_PATH)
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
+admin_router = Router(name="admin")
 router = Router()
 dp.include_router(router)
 
@@ -567,7 +583,8 @@ def kb_confirm(payment_url: str | None = None) -> InlineKeyboardBuilder:
     kb.button(text="✅ Всё верно, оплатить при получении", callback_data="confirm")
 
     if payment_url:
-        kb.row(InlineKeyboardButton(text="💳 Всё верно, оплатить картой", url=payment_url))
+        kb.row(InlineKeyboardButton(text="💳 Всё верно, оплатить онлайн", url=payment_url))
+        kb.row(InlineKeyboardButton(text="✅ Я оплатил онлайн", callback_data="confirm"))
 
     kb.row(InlineKeyboardButton(text="Назад", callback_data="back:time"))
     return kb
@@ -879,6 +896,32 @@ async def cmd_support(message: Message):
     )
 
 
+@router.message(Command("send_all"))
+async def admin_broadcast(message: Message):
+    if not ADMIN_CHAT_ID or message.from_user.id != ADMIN_CHAT_ID:
+        return await message.answer("Нет прав для рассылки.")
+
+    # текст после команды
+    text_to_send = message.text.partition(" ")[2].strip()
+    if not text_to_send:
+        return await message.answer("Использование: /send_all Текст оповещения")
+
+    ids = await sheets_get_all_client_ids()
+    if not ids:
+        return await message.answer("В листе «Клиенты» нет получателей.")
+
+    sent, fail = 0, 0
+    for uid in ids:
+        try:
+            await bot.send_message(uid, text_to_send)
+            sent += 1
+        except Exception:
+            fail += 1
+        await asyncio.sleep(0.05)  # мягко, чтобы не упереться в лимиты
+
+    await message.answer(f"Рассылка завершена.\nУспешно: {sent}\nОшибок: {fail}")
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     await ensure_registered_and_show_menu(message)
@@ -962,7 +1005,7 @@ async def text_handler(message: Message):
         await fsm.update_data(uid, phone=phone)  # сохраним локально
         # Уберем клавиатуру
         await message.answer("Спасибо! Регистрация завершена ✅", reply_markup=ReplyKeyboardRemove())
-        await send_today_menu(message.chat.id, uid, reply_markup=None)
+        await send_today_menu(message.chat.id, uid)
         return
 
     if state == "awaiting_custom_address":
@@ -980,14 +1023,6 @@ async def text_handler(message: Message):
     # По умолчанию — если уже зарегистрирован, но пользователь пишет текст
     if state in (None, "menu", "choose_address", "choose_time", "confirm"):
         await message.answer("Воспользуйся, пожалуйста, кнопками ниже 🙂")
-
-
-@router.message(Command("support"))
-@router.message(F.text.casefold() == "связаться с нами")
-async def msg_support_entry(message: Message):
-    uid = message.from_user.id
-    await fsm.set_state(uid, "awaiting_support_message")
-    await message.answer("Опиши, пожалуйста, вопрос одним сообщением — я перешлю его оператору.")
 
 
 @router.message(F.content_type == ContentType.CONTACT)
@@ -1210,6 +1245,14 @@ async def cb_confirm(call: CallbackQuery):
         menu[idx]["Количество"] = str(max(0, cur - 1))
         await fsm.update_data(uid, menu=menu)
 
+    # 👉 уведомляем администратора отдельным сообщением
+    if ADMIN_CHAT_ID:
+        try:
+            admin_note = f"🧾 Новый заказ: {h(name)}, {h(phone)}, {h(address)}."
+            await bot.send_message(ADMIN_CHAT_ID, admin_note, parse_mode="HTML")
+        except Exception:
+            pass
+
     # Финальный текст + кнопка "Посмотреть меню на сегодня"
     text_ok = "Спасибо! Твой заказ принят ✅"
     kb = kb_show_menu_again().as_markup()
@@ -1371,7 +1414,6 @@ async def cb_support_reply(call: CallbackQuery):
         parse_mode="HTML"
     )
     await call.answer()
-
 
 # ---------- Точка входа ----------
 
