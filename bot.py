@@ -22,6 +22,7 @@ import json
 import os
 import re
 import html
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -62,6 +63,14 @@ GSHEET_ID = os.getenv("GSHEET_ID")
 SERVICE_ACCOUNT_JSON_PATH = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 SERVICE_ACCOUNT_INFO = os.getenv("GOOGLE_SERVICE_ACCOUNT_INFO")  # альтернатива пути
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0") or 0)
+
+# список дополнительных получателей уведомлений
+_raw = os.getenv("NOTIFY_IDS", "") or ""
+NOTIFY_IDS: List[int] = []
+for part in _raw.split(","):
+    p = part.strip()
+    if p.isdigit():
+        NOTIFY_IDS.append(int(p))
 
 if not BOT_TOKEN or not GSHEET_ID or not (SERVICE_ACCOUNT_JSON_PATH or SERVICE_ACCOUNT_INFO):
     raise RuntimeError(
@@ -131,6 +140,9 @@ def extract_ddmmyyyy(s: str) -> str:
     # фоллбэк: сегодня
     return datetime.now().strftime("%d.%m.%Y")
 
+def now_msk() -> str:
+    return (datetime.now() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+
 
 def h(s: str) -> str:
     return html.escape(s or "", quote=False)
@@ -187,7 +199,7 @@ class GoogleSheetsClient:
                 name,
                 username or "",
                 phone,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                now_msk(),
             ],
             value_input_option="USER_ENTERED",
         )
@@ -225,12 +237,18 @@ class GoogleSheetsClient:
             dish: str,
             address: str,
             timeslot: str,
+            payment_label: str
     ):
         ws = self.ws_orders()
-        ws.append_row(
-            [date_str, str(user_id), name, phone, dish, address, timeslot],
-            value_input_option="USER_ENTERED",
+        ws.spreadsheet.values_append(
+            f"{ws.title}!A1:H1",
+            params={
+                "valueInputOption": "USER_ENTERED",
+                "insertDataOption": "INSERT_ROWS",
+            },
+            body={"values": [[date_str, str(user_id), name, phone, dish, address, timeslot, payment_label]]},
         )
+
 
     def find_menu_row_by_day_and_dish(self, day_name: str, dish_name: str) -> tuple[int | None, dict | None]:
         ws = self.ws_menu()
@@ -393,7 +411,7 @@ async def sheets_get_all_client_ids() -> List[int]:
 
 
 async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str):
-    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_str = now_msk()
     # адрес/время нам неизвестны на этом шаге — пишем пусто
     await asyncio.to_thread(
         get_sheets_client().append_overorder,
@@ -406,7 +424,7 @@ async def reserve_one_portion_for_today(dish_name: str) -> tuple[bool, str | Non
     Пытается уменьшить Количество на 1 для сегодняшнего дня и указанного блюда.
     Возвращает (True, None) если успешно, (False, "причина") если нет.
     """
-    day = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    day = now_msk()
     row_index, record = await sheets_find_menu_row(day, dish_name)
     if not row_index:
         return False, "Позиция меню не найдена."
@@ -421,7 +439,7 @@ async def reserve_one_portion_for_today(dish_name: str) -> tuple[bool, str | Non
 
 
 async def release_one_portion_for_today(dish_name: str):
-    day = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    day = now_msk()
     row_index, record = await sheets_find_menu_row(day, dish_name)
     if not row_index:
         return
@@ -429,6 +447,7 @@ async def release_one_portion_for_today(dish_name: str):
     # безопасно вернуть 1 (можем ограничить верхнюю границу по желанию)
     await sheets_set_quantity_by_row(row_index, current + 1)
 
+logger = logging.getLogger("orders")
 
 async def sheets_append_order(
         user_id: int,
@@ -437,12 +456,24 @@ async def sheets_append_order(
         dish: str,
         address: str,
         timeslot: str,
+        payment_label: str,
+
 ):
-    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_str = now_msk()
     await asyncio.to_thread(
         get_sheets_client().append_order,
-        date_str, user_id, name, phone, dish, address, timeslot
+        date_str, user_id, name, phone, dish, address, timeslot, payment_label
     )
+
+async def notify_recipients(text: str):
+    if not NOTIFY_IDS:
+        return
+    for rid in NOTIFY_IDS:
+        try:
+            await bot.send_message(rid, text, parse_mode="HTML")
+        except Exception:
+            pass
+        await asyncio.sleep(0.03)
 
 
 # ---------- SQLite FSM ----------
@@ -580,11 +611,11 @@ def kb_choose_time() -> InlineKeyboardBuilder:
 def kb_confirm(payment_url: str | None = None) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
 
-    kb.button(text="✅ Всё верно, оплатить при получении", callback_data="confirm")
+    kb.row(InlineKeyboardButton(text="✅ Всё верно, оплатить при получении", callback_data="confirm_cash"))
 
     if payment_url:
         kb.row(InlineKeyboardButton(text="💳 Всё верно, оплатить онлайн", url=payment_url))
-        kb.row(InlineKeyboardButton(text="✅ Я оплатил онлайн", callback_data="confirm"))
+        kb.row(InlineKeyboardButton(text="✅ Я оплатил онлайн", callback_data="confirm_paid"))
 
     kb.row(InlineKeyboardButton(text="Назад", callback_data="back:time"))
     return kb
@@ -632,7 +663,7 @@ async def ensure_registered_and_show_menu(message: Message):
 
 
 async def send_today_menu(chat_id: int, user_id: int):
-    today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    today = now_msk()
     try:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
     except Exception:
@@ -872,6 +903,87 @@ async def show_menu_item(
         await callback_query.answer()
 
 
+async def _finalize_order(call: CallbackQuery, payment_label: str):
+    user = call.from_user
+    if not user:
+        return
+    uid = user.id
+
+    data = await fsm.get_data(uid)
+    dish = data.get("chosen_dish")
+    address = data.get("chosen_address")
+    timeslot = data.get("chosen_time")
+
+    # резерв порции
+    ok, err = await reserve_one_portion_for_today(dish)
+    if not ok:
+        await call.answer(err or "Не удалось оформить: блюдо закончилось.", show_alert=True)
+        await fsm.set_state(uid, "menu")
+        await send_today_menu(call.message.chat.id, uid)
+        return
+
+    client = await sheets_find_client(uid)
+    if not client:
+        await release_one_portion_for_today(dish)
+        await call.answer("Не найден профиль клиента. Отправь /start для регистрации.", show_alert=True)
+        await fsm.clear(uid)
+        try:
+            await call.message.edit_text("Ошибка профиля. Отправь /start для регистрации.", parse_mode="HTML")
+        except TelegramBadRequest:
+            try:
+                await bot.delete_message(call.message.chat.id, call.message.message_id)
+            except Exception:
+                pass
+            await bot.send_message(call.message.chat.id, "Ошибка профиля. Отправь /start для регистрации.", parse_mode="HTML")
+        return
+
+    name = str(client.get("Имя", "")).strip()
+    phone = str(client.get("Номер телефона", "")).strip()
+
+    # запись в Заказы (с логом)
+    try:
+        await sheets_append_order(uid, name, phone, dish, address, timeslot, payment_label)
+    except Exception as e:
+        # откат резерва, алерт и лог
+        await release_one_portion_for_today(dish)
+        import logging; logging.exception("Не удалось сохранить заказ в Sheets: %s", e)
+        await call.answer("Не удалось сохранить заказ. Попробуй позже.", show_alert=True)
+        return
+
+    # обновляем локальный кеш количества
+    local = await fsm.get_data(uid)
+    menu = local.get("menu", [])
+    idx = local.get("menu_idx", 0)
+    if 0 <= idx < len(menu):
+        try:
+            cur = int(str(menu[idx].get("Количество", "0")).strip() or "0")
+        except ValueError:
+            cur = 0
+        menu[idx]["Количество"] = str(max(0, cur - 1))
+        await fsm.update_data(uid, menu=menu)
+
+    # уведомление получателям
+    note = (
+        f"🧾 Новый заказ ({payment_label}):\n"
+        f"Имя: {h(name)}\nТелефон: {h(phone)}\nАдрес: {h(address)}\n"
+    )
+    await notify_recipients(note)
+
+    # ответ пользователю
+    text_ok = "Спасибо! Твой заказ принят ✅"
+    kb = kb_show_menu_again().as_markup()
+    try:
+        await call.message.edit_text(text_ok, reply_markup=kb, parse_mode="HTML")
+    except TelegramBadRequest:
+        try:
+            await bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        await bot.send_message(call.message.chat.id, text_ok, reply_markup=kb, parse_mode="HTML")
+
+    await fsm.set_state(uid, "menu")
+    await fsm.update_data(uid, chosen_dish=None, chosen_address=None, chosen_time=None)
+    await call.answer()
 # ---------- Хэндлеры ----------
 
 @router.message(Command("menu"))
@@ -1092,7 +1204,7 @@ async def cb_menu_choose(call: CallbackQuery):
     dish = str(menu[idx].get("Блюда", "")).strip()
 
     # Проверка остатков (без списания)
-    day = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    day = now_msk()
     row_index, _ = await sheets_find_menu_row(day, dish)
     if not row_index:
         return await call.answer("Позиция меню не найдена.", show_alert=True)
@@ -1163,7 +1275,7 @@ async def cb_choose_time(call: CallbackQuery):
     data = await fsm.get_data(uid)
     dish = data.get("chosen_dish", "")
     address = data.get("chosen_address", "")
-    pay_url = f"https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-2181530393354040.005802BY5913UNP_2918581506007Belarus63044DC0"
+    pay_url = f"https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-32155303933540515.005802BY5913UNP_2918581506007Belarus63044445"
     kb = kb_confirm(payment_url=pay_url).as_markup()
 
     text = (
@@ -1185,90 +1297,13 @@ async def cb_choose_time(call: CallbackQuery):
 
     await call.answer()
 
+@router.callback_query(F.data == "confirm_cash")
+async def cb_confirm_cash(call: CallbackQuery):
+    await _finalize_order(call, payment_label="оплата при получении")
 
-@router.callback_query(F.data == "confirm")
-async def cb_confirm(call: CallbackQuery):
-    user = call.from_user
-    if not user:
-        return
-    uid = user.id
-
-    data = await fsm.get_data(uid)
-    dish = data.get("chosen_dish")
-    address = data.get("chosen_address")
-    timeslot = data.get("chosen_time")
-
-    # Повторная проверка и «резерв» 1 порции
-    ok, err = await reserve_one_portion_for_today(dish)
-    if not ok:
-        await call.answer(err or "Не удалось оформить: блюдо закончилось.", show_alert=True)
-        await fsm.set_state(uid, "menu")
-        await send_today_menu(call.message.chat.id, uid)
-        return
-
-    # Клиент
-    client = await sheets_find_client(uid)
-    if not client:
-        await release_one_portion_for_today(dish)  # откат резерва
-        await call.answer("Не найден профиль клиента. Отправь /start для регистрации.", show_alert=True)
-        await fsm.clear(uid)
-        try:
-            await call.message.edit_text("Ошибка профиля. Отправь /start для регистрации.", parse_mode="HTML")
-        except TelegramBadRequest:
-            try:
-                await bot.delete_message(call.message.chat.id, call.message.message_id)
-            except Exception:
-                pass
-            await bot.send_message(call.message.chat.id, "Ошибка профиля. Отправь /start для регистрации.",
-                                   parse_mode="HTML")
-        return
-
-    name = str(client.get("Имя", "")).strip()
-    phone = str(client.get("Номер телефона", "")).strip()
-
-    # Запись заказа в "Заказы"
-    try:
-        await sheets_append_order(uid, name, phone, dish, address, timeslot)
-    except Exception:
-        await release_one_portion_for_today(dish)  # откат
-        await call.answer("Не удалось сохранить заказ. Попробуй позже.", show_alert=True)
-        return
-
-    data = await fsm.get_data(uid)
-    menu = data.get("menu", [])
-    idx = data.get("menu_idx", 0)
-    if 0 <= idx < len(menu):
-        try:
-            cur = int(str(menu[idx].get("Количество", "0")).strip() or "0")
-        except ValueError:
-            cur = 0
-        menu[idx]["Количество"] = str(max(0, cur - 1))
-        await fsm.update_data(uid, menu=menu)
-
-    # 👉 уведомляем администратора отдельным сообщением
-    try:
-        admin_note = f"🧾 Новый заказ: {h(name)}, {h(phone)}, {h(address)}."
-        await bot.send_message(ADMIN_CHAT_ID, admin_note, parse_mode="HTML")
-    except Exception:
-        pass
-
-    # Финальный текст + кнопка "Посмотреть меню на сегодня"
-    text_ok = "Спасибо! Твой заказ принят ✅"
-    kb = kb_show_menu_again().as_markup()
-
-    try:
-        await call.message.edit_text(text_ok, reply_markup=kb, parse_mode="HTML")
-    except TelegramBadRequest:
-        try:
-            await bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
-            pass
-        await bot.send_message(call.message.chat.id, text_ok, reply_markup=kb, parse_mode="HTML")
-
-    await fsm.set_state(uid, "menu")
-    await fsm.update_data(uid, chosen_dish=None, chosen_address=None, chosen_time=None)
-    await call.answer()
-
+@router.callback_query(F.data == "confirm_paid")
+async def cb_confirm_paid(call: CallbackQuery):
+    await _finalize_order(call, payment_label="оплачено онлайн")
 
 # ---- Назад ----
 
@@ -1335,7 +1370,7 @@ async def cb_show_menu_again(call: CallbackQuery):
     uid = call.from_user.id
     await fsm.set_state(uid, "menu")
     # Обновим меню из Google Sheets, чтобы карточка была актуальной
-    today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    today = now_msk()
     fresh_menu = await sheets_get_menu(today)
     await fsm.update_data(uid, menu=fresh_menu, menu_idx=0)
     # отрисуем карточку в том же сообщении
@@ -1345,7 +1380,7 @@ async def cb_show_menu_again(call: CallbackQuery):
 @router.callback_query(F.data == "menu_show_week")
 async def cb_menu_show_week(call: CallbackQuery):
     # берём «сегодня» как старт
-    start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    start = now_msk()
     items = await sheets_get_week_menu(start, days=7)
     if not items:
         await call.answer("Меню на неделю отсутствует", show_alert=True)
