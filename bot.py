@@ -628,7 +628,7 @@ async def ensure_registered_and_show_menu(message: Message):
     else:
         await fsm.set_state(uid, "awaiting_name")
         await fsm.update_data(uid, username=username)
-        await message.answer("Привет! Давай познакомимся. Как тебя зовут? 🙂")
+        await message.answer("Привет! Давай познакомимся. Напиши имя и фамилию 🙂")
 
 
 async def send_today_menu(chat_id: int, user_id: int):
@@ -1112,7 +1112,7 @@ async def cb_menu_choose(call: CallbackQuery):
 
     # Клавиатура и ТЕКСТ
     kb = kb_choose_address().as_markup()
-    text = f"Вы выбрали: <b>{h(dish)}</b>\n\nВыбери адрес доставки:"
+    text = f"Вы выбрали: \n<b>{h(dish)}</b>\n\nВыбери адрес доставки:"
 
     # ❗️Всегда удаляем карточку (фото/текст) и шлём НОВОЕ текстовое сообщение
     try:
@@ -1246,12 +1246,11 @@ async def cb_confirm(call: CallbackQuery):
         await fsm.update_data(uid, menu=menu)
 
     # 👉 уведомляем администратора отдельным сообщением
-    if ADMIN_CHAT_ID:
-        try:
-            admin_note = f"🧾 Новый заказ: {h(name)}, {h(phone)}, {h(address)}."
-            await bot.send_message(ADMIN_CHAT_ID, admin_note, parse_mode="HTML")
-        except Exception:
-            pass
+    try:
+        admin_note = f"🧾 Новый заказ: {h(name)}, {h(phone)}, {h(address)}."
+        await bot.send_message(ADMIN_CHAT_ID, admin_note, parse_mode="HTML")
+    except Exception:
+        pass
 
     # Финальный текст + кнопка "Посмотреть меню на сегодня"
     text_ok = "Спасибо! Твой заказ принят ✅"
@@ -1289,7 +1288,7 @@ async def cb_back(call: CallbackQuery):
         kb = kb_choose_address().as_markup()
         data = await fsm.get_data(uid)
         dish = data.get("chosen_dish", "")
-        text = f"Выбранное блюдо: <b>{dish}</b>\n\nВыбери адрес доставки:"
+        text = f"Выбранное блюдо: \n<b>{dish}</b>\n\nВыбери адрес доставки:"
         msg = call.message
         try:
             if msg.photo:
