@@ -237,16 +237,17 @@ class GoogleSheetsClient:
             dish: str,
             address: str,
             timeslot: str,
+            qty: int,
             payment_label: str
     ):
         ws = self.ws_orders()
         ws.spreadsheet.values_append(
-            f"{ws.title}!A1:H1",
+            f"{ws.title}!A1:I1",
             params={
                 "valueInputOption": "USER_ENTERED",
                 "insertDataOption": "INSERT_ROWS",
             },
-            body={"values": [[date_str, str(user_id), name, phone, dish, address, timeslot, payment_label]]},
+            body={"values": [[date_str, str(user_id), name, phone, dish, address, timeslot, int(qty), payment_label]]},
         )
 
 
@@ -419,33 +420,45 @@ async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str
     )
 
 
-async def reserve_one_portion_for_today(dish_name: str) -> tuple[bool, str | None]:
+async def reserve_portions_for_today(dish_name: str, qty: int) -> tuple[bool, str | None]:
     """
-    Пытается уменьшить Количество на 1 для сегодняшнего дня и указанного блюда.
-    Возвращает (True, None) если успешно, (False, "причина") если нет.
+    Уменьшает Количество на qty для сегодняшнего дня и указанного блюда.
+    Вернёт (True, None) если успешно, иначе (False, "причина").
     """
-    day = now_msk()
-    row_index, record = await sheets_find_menu_row(day, dish_name)
+    day = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row_index, _ = await sheets_find_menu_row(day, dish_name)
     if not row_index:
         return False, "Позиция меню не найдена."
 
     current = await sheets_get_quantity_by_row(row_index)
-    if current <= 0:
-        return False, "Увы, блюдо закончилось."
+    try:
+        need = int(qty)
+    except Exception:
+        need = 1
+    if need <= 0:
+        need = 1
 
-    # оптимистичное уменьшение
-    await sheets_set_quantity_by_row(row_index, current - 1)
+    if current < need:
+        return False, f"Доступно только {current} шт."
+
+    await sheets_set_quantity_by_row(row_index, current - need)
     return True, None
 
 
-async def release_one_portion_for_today(dish_name: str):
-    day = now_msk()
-    row_index, record = await sheets_find_menu_row(day, dish_name)
+async def release_portions_for_today(dish_name: str, qty: int):
+    """Возвращает qty порций обратно (на случай ошибки при записи заказа)."""
+    day = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row_index, _ = await sheets_find_menu_row(day, dish_name)
     if not row_index:
         return
     current = await sheets_get_quantity_by_row(row_index)
-    # безопасно вернуть 1 (можем ограничить верхнюю границу по желанию)
-    await sheets_set_quantity_by_row(row_index, current + 1)
+    try:
+        add_back = int(qty)
+    except Exception:
+        add_back = 1
+    if add_back <= 0:
+        add_back = 1
+    await sheets_set_quantity_by_row(row_index, current + add_back)
 
 logger = logging.getLogger("orders")
 
@@ -456,13 +469,14 @@ async def sheets_append_order(
         dish: str,
         address: str,
         timeslot: str,
+        qty: int,
         payment_label: str,
 
 ):
     date_str = now_msk()
     await asyncio.to_thread(
         get_sheets_client().append_order,
-        date_str, user_id, name, phone, dish, address, timeslot, payment_label
+        date_str, user_id, name, phone, dish, address, timeslot, qty, payment_label
     )
 
 async def notify_recipients(text: str):
@@ -605,6 +619,16 @@ def kb_choose_time() -> InlineKeyboardBuilder:
         kb.button(text=t, callback_data=f"time:{t}")
     kb.button(text="Назад", callback_data="back:addr")
     kb.adjust(2, 1)
+    return kb
+
+def kb_choose_qty() -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="1", callback_data="qty:1"),
+        InlineKeyboardButton(text="2", callback_data="qty:2"),
+        InlineKeyboardButton(text="Больше", callback_data="qty:more")
+    )
+    kb.row(InlineKeyboardButton(text="Назад", callback_data="back:time"))
     return kb
 
 
@@ -903,6 +927,32 @@ async def show_menu_item(
         await callback_query.answer()
 
 
+async def _show_confirm(uid: int, msg: Message):
+    data = await fsm.get_data(uid)
+    dish = data.get("chosen_dish", "")
+    address = data.get("chosen_address", "")
+    timeslot = data.get("chosen_time", "")
+    qty = int(data.get("qty", 1))
+
+    pay_url = "https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-32175303933540515.005802BY5913UNP_2918581506007Belarus6304EDF0"
+    kb = kb_confirm(payment_url=pay_url).as_markup()
+
+    text = (
+        "Проверь заказ:\n"
+        f"• Блюдо: <b>{h(dish)}</b>\n"
+        f"• Адрес: <b>{h(address)}</b>\n"
+        f"• Время: <b>{h(timeslot)}</b>\n"
+        f"• Количество: <b>{qty}</b>\n\n"
+        "Подтвердить заказ?"
+    )
+
+    try:
+        await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except TelegramBadRequest:
+        # если редактировать нельзя — присылаем новое
+        await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
 async def _finalize_order(call: CallbackQuery, payment_label: str):
     user = call.from_user
     if not user:
@@ -913,9 +963,10 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
     dish = data.get("chosen_dish")
     address = data.get("chosen_address")
     timeslot = data.get("chosen_time")
+    qty = int(str(data.get("qty", 1)) or "1")
 
     # резерв порции
-    ok, err = await reserve_one_portion_for_today(dish)
+    ok, err = await reserve_portions_for_today(dish, qty)
     if not ok:
         await call.answer(err or "Не удалось оформить: блюдо закончилось.", show_alert=True)
         await fsm.set_state(uid, "menu")
@@ -924,7 +975,7 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
 
     client = await sheets_find_client(uid)
     if not client:
-        await release_one_portion_for_today(dish)
+        await release_portions_for_today(dish, qty)
         await call.answer("Не найден профиль клиента. Отправь /start для регистрации.", show_alert=True)
         await fsm.clear(uid)
         try:
@@ -942,10 +993,10 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
 
     # запись в Заказы (с логом)
     try:
-        await sheets_append_order(uid, name, phone, dish, address, timeslot, payment_label)
+        await sheets_append_order(uid, name, phone, dish, address, timeslot, qty, payment_label,)
     except Exception as e:
         # откат резерва, алерт и лог
-        await release_one_portion_for_today(dish)
+        await release_portions_for_today(dish, qty)
         import logging; logging.exception("Не удалось сохранить заказ в Sheets: %s", e)
         await call.answer("Не удалось сохранить заказ. Попробуй позже.", show_alert=True)
         return
@@ -1006,6 +1057,13 @@ async def cmd_support(message: Message):
         "Либо свяжись с нами по номеру <b>+375333777308</b>.\n\n"
         "Чтобы отменить — отправь /menu."
     )
+
+@router.message(Command("info"))
+async def cmd_info(message: Message):
+    await message.answer("""Доставка 🚚 в Катин Бор на проходную в 11.50. 
+На Дубровскую  на проходную в 12.10
+На Цельсий в холе в 12.00
+Приятного аппетита 😋""")
 
 
 @router.message(Command("send_all"))
@@ -1091,9 +1149,12 @@ async def text_handler(message: Message):
 
     # Ожидаем имя при регистрации
     if state == "awaiting_name":
-        name = message.text.strip()
+        name = (message.text or "").strip()
         if len(name) < 2:
             await message.answer("Имя должно быть длиннее. Попробуй снова, пожалуйста.")
+            return
+        if not re.fullmatch(r"[A-Za-zА-Яа-яЁё]+(?:-[A-Za-zА-Яа-яЁё]+)?\s+[A-Za-zА-Яа-яЁё]+(?:-[A-Za-zА-Яа-яЁё]+)?", name):
+            await message.answer("Пожалуйста, введи имя и фамилию двумя словами (например: Иван Иванов).")
             return
         await fsm.update_data(uid, name=name)
         await fsm.set_state(uid, "awaiting_phone")
@@ -1130,6 +1191,17 @@ async def text_handler(message: Message):
         kb = kb_choose_time().as_markup()
         await message.answer(f"Адрес доставки: <b>{h(addr)}</b>\n\nТеперь выбери время доставки:", reply_markup=kb,
                              parse_mode="HTML")
+        return
+
+    if state == "awaiting_qty_manual":
+        raw = (message.text or "").strip()
+        if not re.fullmatch(r"\d{1,3}", raw) or int(raw) < 1:
+            await message.answer("Нужно число ≥ 1. Попробуй ещё раз.")
+            return
+        qty = int(raw)
+        await fsm.update_data(uid, qty=qty)
+        # можно вернуть state к choose_qty, но сразу показываем подтверждение:
+        await _show_confirm(uid, message)
         return
 
     # По умолчанию — если уже зарегистрирован, но пользователь пишет текст
@@ -1270,30 +1342,20 @@ async def cb_choose_time(call: CallbackQuery):
     uid = user.id
     timeslot = call.data.split("time:", 1)[1]
     await fsm.update_data(uid, chosen_time=timeslot)
-    await fsm.set_state(uid, "confirm")
-
-    data = await fsm.get_data(uid)
-    dish = data.get("chosen_dish", "")
-    address = data.get("chosen_address", "")
-    pay_url = f"https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-32155303933540515.005802BY5913UNP_2918581506007Belarus63044445"
-    kb = kb_confirm(payment_url=pay_url).as_markup()
+    await fsm.set_state(uid, "choose_qty")
 
     text = (
-        "Проверь заказ:\n"
-        f"• Блюдо: <b>{h(dish)}</b>\n"
-        f"• Адрес: <b>{h(address)}</b>\n"
-        f"• Время: <b>{h(timeslot)}</b>\n\n"
-        "Подтвердить заказ?"
+        f"Выбери количество порций для времени <b>{h(timeslot)}</b>:\n"
+        "Можно выбрать 1, 2 или ввести своё количество."
     )
-
     try:
-        await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await call.message.edit_text(text, reply_markup=kb_choose_qty().as_markup(), parse_mode="HTML")
     except TelegramBadRequest:
         try:
             await bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        await bot.send_message(call.message.chat.id, text, reply_markup=kb, parse_mode="HTML")
+        await bot.send_message(call.message.chat.id, text, reply_markup=kb_choose_qty().as_markup(), parse_mode="HTML")
 
     await call.answer()
 
@@ -1357,6 +1419,19 @@ async def cb_back(call: CallbackQuery):
             except Exception:
                 pass
             await bot.send_message(msg.chat.id, text, reply_markup=kb, parse_mode="HTML")
+        await call.answer()
+        return
+
+    if target == "qty":
+        await fsm.set_state(uid, "choose_qty")
+        data = await fsm.get_data(uid)
+        timeslot = data.get("chosen_time", "")
+        text = f"Выбери количество порций для времени <b>{h(timeslot)}</b>:"
+        try:
+            await call.message.edit_text(text, reply_markup=kb_choose_qty().as_markup(), parse_mode="HTML")
+        except TelegramBadRequest:
+            await bot.send_message(call.message.chat.id, text, reply_markup=kb_choose_qty().as_markup(),
+                                   parse_mode="HTML")
         await call.answer()
         return
 
@@ -1425,6 +1500,24 @@ async def cb_addr_custom(call: CallbackQuery):
     await call.answer()
 
 
+@router.callback_query(F.data.startswith("qty:"))
+async def cb_choose_qty(call: CallbackQuery):
+    uid = call.from_user.id
+    choice = call.data.split("qty:", 1)[1]
+
+    if choice == "more":
+        await fsm.set_state(uid, "awaiting_qty_manual")
+        await call.message.edit_text("Введи количество порций числом (например, 3).", reply_markup=None, parse_mode="HTML")
+        await call.answer()
+        return
+
+    qty = int(choice)  # 1 или 2
+    await fsm.update_data(uid, qty=qty)
+    await _show_confirm(uid, call.message)
+    await call.answer()
+
+
+
 @router.callback_query(F.data.startswith("support_reply:"))
 async def cb_support_reply(call: CallbackQuery):
     # только админ
@@ -1460,6 +1553,7 @@ async def on_startup():
         BotCommand(command="start", description="Начать / регистрация"),
         BotCommand(command="menu", description="Показать меню на сегодня"),
         BotCommand(command="support", description="Связаться с нами"),
+        BotCommand(command="info", description="Инфо о доставке"),
     ])
     # Явно выставим тип меню как Commands (на всякий случай)
     try:
