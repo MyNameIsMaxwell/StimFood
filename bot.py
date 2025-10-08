@@ -23,6 +23,7 @@ import os
 import re
 import html
 import logging
+import random
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -140,13 +141,32 @@ def extract_ddmmyyyy(s: str) -> str:
     # фоллбэк: сегодня
     return datetime.now().strftime("%d.%m.%Y")
 
-def now_msk() -> str:
+def now_msk_str() -> str:
     return (datetime.now() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
-
 
 def h(s: str) -> str:
     return html.escape(s or "", quote=False)
 
+def msk_now_dt() -> datetime:
+    # та же базовая идея, что и now_msk_str(), только возвращаем datetime
+    return datetime.now() + timedelta(hours=3)
+
+def seconds_until_next_930_msk() -> float:
+    now = msk_now_dt()
+    target = now.replace(hour=9, minute=31, second=0, microsecond=0)
+    if now >= target:
+        target = target + timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+def format_menu_for_broadcast(items: List[Dict[str, Any]]) -> str:
+    # выводим список блюд на сегодня построчно
+    lines = []
+    for it in items:
+        dish = str(it.get("Блюда", "")).strip()
+        if dish:
+            lines.append(f"{dish}")
+    return "\n".join(lines)
 
 # ---------- Google Sheets клиент (синхронный gspread вызываем через asyncio.to_thread) ----------
 
@@ -199,7 +219,7 @@ class GoogleSheetsClient:
                 name,
                 username or "",
                 phone,
-                now_msk(),
+                now_msk_str(),
             ],
             value_input_option="USER_ENTERED",
         )
@@ -412,7 +432,7 @@ async def sheets_get_all_client_ids() -> List[int]:
 
 
 async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str):
-    date_str = now_msk()
+    date_str = now_msk_str()
     # адрес/время нам неизвестны на этом шаге — пишем пусто
     await asyncio.to_thread(
         get_sheets_client().append_overorder,
@@ -473,7 +493,7 @@ async def sheets_append_order(
         payment_label: str,
 
 ):
-    date_str = now_msk()
+    date_str = now_msk_str()
     await asyncio.to_thread(
         get_sheets_client().append_order,
         date_str, user_id, name, phone, dish, address, timeslot, qty, payment_label
@@ -687,7 +707,7 @@ async def ensure_registered_and_show_menu(message: Message):
 
 
 async def send_today_menu(chat_id: int, user_id: int):
-    today = now_msk()
+    today = now_msk_str()
     try:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
     except Exception:
@@ -997,7 +1017,7 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
     except Exception as e:
         # откат резерва, алерт и лог
         await release_portions_for_today(dish, qty)
-        import logging; logging.exception("Не удалось сохранить заказ в Sheets: %s", e)
+        logging.exception("Не удалось сохранить заказ в Sheets: %s", e)
         await call.answer("Не удалось сохранить заказ. Попробуй позже.", show_alert=True)
         return
 
@@ -1276,7 +1296,7 @@ async def cb_menu_choose(call: CallbackQuery):
     dish = str(menu[idx].get("Блюда", "")).strip()
 
     # Проверка остатков (без списания)
-    day = now_msk()
+    day = now_msk_str()
     row_index, _ = await sheets_find_menu_row(day, dish)
     if not row_index:
         return await call.answer("Позиция меню не найдена.", show_alert=True)
@@ -1445,7 +1465,7 @@ async def cb_show_menu_again(call: CallbackQuery):
     uid = call.from_user.id
     await fsm.set_state(uid, "menu")
     # Обновим меню из Google Sheets, чтобы карточка была актуальной
-    today = now_msk()
+    today = now_msk_str()
     fresh_menu = await sheets_get_menu(today)
     await fsm.update_data(uid, menu=fresh_menu, menu_idx=0)
     # отрисуем карточку в том же сообщении
@@ -1455,7 +1475,7 @@ async def cb_show_menu_again(call: CallbackQuery):
 @router.callback_query(F.data == "menu_show_week")
 async def cb_menu_show_week(call: CallbackQuery):
     # берём «сегодня» как старт
-    start = now_msk()
+    start = now_msk_str()
     items = await sheets_get_week_menu(start, days=7)
     if not items:
         await call.answer("Меню на неделю отсутствует", show_alert=True)
@@ -1562,10 +1582,68 @@ async def on_startup():
         pass
 
 
+async def daily_930_broadcast_task():
+    """
+    Бесконечный цикл:
+      - ждём до ближайших 09:30 МСК,
+      - если в Меню есть позиции на сегодня — отправляем автопостинг всем клиентам,
+      - повторяем.
+    """
+    await asyncio.sleep(3)  # дать боту подняться
+    while True:
+        try:
+            delay = seconds_until_next_930_msk()
+            await asyncio.sleep(delay)
+
+            # собираем меню на сегодня
+            today_marker = (msk_now_dt()).strftime("%Y-%m-%d %H:%M:%S")
+            menu_items = await sheets_get_menu(today_marker)
+            if not menu_items:
+                # сегодня меню нет — просто пропускаем рассылку
+                continue
+
+            menu_text = format_menu_for_broadcast(menu_items)
+            if not menu_text.strip():
+                # нет осмысленных позиций
+                continue
+
+            templates = [
+                "В меню:\n{menu}\n\nКоличество ограничено 😋",
+                "Сегодня в меню:\n{menu}\n\nУспей заказать. Количество ограничено 😋",
+                "Сегодня у нас в меню:\n{menu}\n\nУспей заказать 😋",
+            ]
+            text_to_send = random.choice(templates).format(menu=menu_text)
+
+            # адресаты из листа "Клиенты"
+            ids = await sheets_get_all_client_ids()
+            if not ids:
+                continue
+
+            # аккуратно рассылаем
+            for uid in ids:
+                try:
+                    await bot.send_message(uid, text_to_send)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.05)  # мягкий троттлинг
+        except Exception:
+            # чтобы цикл не умер на исключении
+            await asyncio.sleep(5)
+
+
+# Настраиваем логгер
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
 async def main():
+    logging.info(now_msk_str())
+    # Временно отключить автопостинг = закомментировать строчку ниже
+    asyncio.create_task(daily_930_broadcast_task())
     await on_startup()
     await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
-
 
 if __name__ == "__main__":
     try:
