@@ -52,7 +52,7 @@ from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
 
 # ---------- Константы настройки ----------
-ADDRESS_OPTIONS = ["Цельсий", "Катин Бор", "Дубровская"]
+ADDRESS_OPTIONS = ["Цельсий", "Катин Бор(СТиМ)", "Дубровская(СТиМ)", "Катин Бор(Gefest)"]
 TIME_SLOTS = ["12-13", "13-14"]
 
 DB_PATH = "fsm.sqlite3"
