@@ -52,7 +52,7 @@ from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
 
 # ---------- Константы настройки ----------
-ADDRESS_OPTIONS = ["Цельсий", "Катин Бор(СТиМ)", "Дубровская(СТиМ)", "Катин Бор(Gefest)"]
+ADDRESS_OPTIONS = ["Цельсий", "Дубровская(СТиМ)", "Катин Бор(СТиМ)", "Катин Бор(Gefest)"]
 TIME_SLOTS = ["12-13", "13-14"]
 
 DB_PATH = "fsm.sqlite3"
@@ -255,6 +255,7 @@ class GoogleSheetsClient:
             name: str,
             phone: str,
             dish: str,
+            tariff: str,
             address: str,
             timeslot: str,
             qty: int,
@@ -262,12 +263,12 @@ class GoogleSheetsClient:
     ):
         ws = self.ws_orders()
         ws.spreadsheet.values_append(
-            f"{ws.title}!A1:I1",
+            f"{ws.title}!A1:J1",
             params={
                 "valueInputOption": "USER_ENTERED",
                 "insertDataOption": "INSERT_ROWS",
             },
-            body={"values": [[date_str, str(user_id), name, phone, dish, address, timeslot, int(qty), payment_label]]},
+            body={"values": [[date_str, str(user_id), name, phone, dish, tariff, address, timeslot, int(qty), payment_label]]},
         )
 
 
@@ -487,6 +488,7 @@ async def sheets_append_order(
         name: str,
         phone: str,
         dish: str,
+        tariff: str,
         address: str,
         timeslot: str,
         qty: int,
@@ -496,7 +498,7 @@ async def sheets_append_order(
     date_str = now_msk_str()
     await asyncio.to_thread(
         get_sheets_client().append_order,
-        date_str, user_id, name, phone, dish, address, timeslot, qty, payment_label
+        date_str, user_id, name, phone, dish, tariff, address, timeslot, qty, payment_label
     )
 
 async def notify_recipients(text: str):
@@ -602,25 +604,30 @@ def kb_support():
     return kb.as_markup(resize_keyboard=True, one_time_keyboard=False)
 
 
-def kb_menu_navigation(can_switch: bool, show_choose: bool = True) -> InlineKeyboardBuilder:
+def kb_menu_navigation(can_switch: bool, include_tariffs: bool = True) -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
+
+    # Стрелки
     if can_switch:
         kb.button(text="◀️", callback_data="menu_prev")
-    if show_choose:
-        kb.button(text="Заказать", callback_data="menu_choose")
+    # Раньше здесь была кнопка "Заказать" — её больше нет
     if can_switch:
         kb.button(text="▶️", callback_data="menu_next")
-
-    if can_switch and show_choose:
-        kb.adjust(3)
-    elif can_switch or show_choose:
+    if can_switch:
         kb.adjust(2)
-    else:
-        kb.adjust(1)
 
+    # Ряд с тарифами
+    if include_tariffs:
+        kb.row(
+            InlineKeyboardButton(text="Максимум", callback_data="tariff:max"),
+            InlineKeyboardButton(text="Стандарт+",  callback_data="tariff:standard_plus"),
+            InlineKeyboardButton(text="Стандарт", callback_data="tariff:standard"),
+        )
+
+    # Внизу — "Посмотреть всё меню"
     kb.row(InlineKeyboardButton(text="Посмотреть всё меню", callback_data="menu_show_week"))
-
     return kb
+
 
 
 def kb_choose_address() -> InlineKeyboardBuilder:
@@ -629,7 +636,7 @@ def kb_choose_address() -> InlineKeyboardBuilder:
         kb.button(text=a, callback_data=f"addr:{a}")
     kb.button(text="Ввести адрес", callback_data="addr_custom")
     kb.button(text="Назад", callback_data="back:menu")
-    kb.adjust(3, 1, 1)  # 3 адреса, потом "Ввести адрес", потом "Назад"
+    kb.adjust(2, 2, 1, 1)  # 2-2 адреса, потом "Ввести адрес", потом "Назад"
     return kb
 
 
@@ -888,13 +895,22 @@ async def show_menu_item(
     qty = str(item.get("Количество", "")).strip()
     photo = str(item.get("Фото", "")).strip()
 
-    caption_lines = [f"<b>Блюдо дня</b>:\n{h(dish_name)}"]
+    caption_lines = [
+        f"<b>Блюдо дня</b>:\n{h(dish_name)}",
+        "",
+        "<b>Тарифы</b>",
+        "• <b>Максимум</b> — горячее, суп, салат, напиток, фирменный соус: <b>15 р</b>",
+        "• <b>Стандарт</b> + — горячее, суп, салат: <b>13 р</b>",
+        "• <b>Стандарт</b> — горячее + суп или салат: <b>11 р</b>",
+
+
+    ]
     if qty:
         caption_lines.append(f"Доступно: {h(qty)}")
     text_or_caption = "\n".join(caption_lines)
 
     can_switch = len(menu) > 1
-    kb = kb_menu_navigation(can_switch=can_switch, show_choose=True).as_markup()
+    kb = kb_menu_navigation(can_switch=can_switch, include_tariffs=True).as_markup()
 
     # Первый показ (после /start или после успешной регистрации)
     if not callback_query:
@@ -949,7 +965,8 @@ async def show_menu_item(
 
 async def _show_confirm(uid: int, msg: Message):
     data = await fsm.get_data(uid)
-    dish = data.get("chosen_dish", "")
+    # dish = data.get("chosen_dish", "")
+    tariff = data.get("chosen_tariff", "")
     address = data.get("chosen_address", "")
     timeslot = data.get("chosen_time", "")
     qty = int(data.get("qty", 1))
@@ -959,7 +976,7 @@ async def _show_confirm(uid: int, msg: Message):
 
     text = (
         "Проверь заказ:\n"
-        f"• Блюдо: <b>{h(dish)}</b>\n"
+        f"• Тариф: <b>{h(tariff)}</b>\n" 
         f"• Адрес: <b>{h(address)}</b>\n"
         f"• Время: <b>{h(timeslot)}</b>\n"
         f"• Количество: <b>{qty}</b>\n\n"
@@ -981,9 +998,10 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
 
     data = await fsm.get_data(uid)
     dish = data.get("chosen_dish")
+    tariff = data.get("chosen_tariff", "")
     address = data.get("chosen_address")
     timeslot = data.get("chosen_time")
-    qty = int(str(data.get("qty", 1)) or "1")
+    qty = int(data.get("chosen_qty", 1))
 
     # резерв порции
     ok, err = await reserve_portions_for_today(dish, qty)
@@ -1013,7 +1031,7 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
 
     # запись в Заказы (с логом)
     try:
-        await sheets_append_order(uid, name, phone, dish, address, timeslot, qty, payment_label,)
+        await sheets_append_order(uid, name, phone, dish, tariff, address, timeslot, qty, payment_label,)
     except Exception as e:
         # откат резерва, алерт и лог
         await release_portions_for_today(dish, qty)
@@ -1284,9 +1302,52 @@ async def cb_menu_next(call: CallbackQuery):
     await show_menu_item(call.message.chat.id, uid, callback_query=call)
 
 
-@router.callback_query(F.data == "menu_choose")
-async def cb_menu_choose(call: CallbackQuery):
+# @router.callback_query(F.data == "menu_choose")
+# async def cb_menu_choose(call: CallbackQuery):
+#     uid = call.from_user.id
+#     data = await fsm.get_data(uid)
+#     menu = data.get("menu", [])
+#     if not menu:
+#         return await call.answer("Меню пустое.")
+#
+#     idx = data.get("menu_idx", 0)
+#     dish = str(menu[idx].get("Блюда", "")).strip()
+#
+#     # Проверка остатков (без списания)
+#     day = now_msk_str()
+#     row_index, _ = await sheets_find_menu_row(day, dish)
+#     if not row_index:
+#         return await call.answer("Позиция меню не найдена.", show_alert=True)
+#     qty = await sheets_get_quantity_by_row(row_index)
+#     if qty <= 0:
+#         client = await sheets_find_client(uid)
+#         if client:
+#             name = str(client.get("Имя", "")).strip()
+#             phone = str(client.get("Номер телефона", "")).strip()
+#             await sheets_append_overorder(uid, name, phone, dish)
+#         return await call.answer("Увы, это блюдо уже закончилось на сегодня",
+#                                  show_alert=True)
+#
+#     # Сохраняем выбор
+#     await fsm.update_data(uid, chosen_dish=dish)
+#     await fsm.set_state(uid, "choose_address")
+#
+#     # Клавиатура и ТЕКСТ
+#     kb = kb_choose_address().as_markup()
+#     text = f"Вы выбрали: \n<b>{h(dish)}</b>\n\nВыбери адрес доставки:"
+#
+#     # ❗️Всегда удаляем карточку (фото/текст) и шлём НОВОЕ текстовое сообщение
+#     try:
+#         await bot.delete_message(call.message.chat.id, call.message.message_id)
+#     except Exception:
+#         pass
+#     await bot.send_message(call.message.chat.id, text, reply_markup=kb, parse_mode="HTML")
+#     await call.answer()
+
+@router.callback_query(F.data.startswith("tariff:"))
+async def cb_choose_tariff(call: CallbackQuery):
     uid = call.from_user.id
+
     data = await fsm.get_data(uid)
     menu = data.get("menu", [])
     if not menu:
@@ -1302,23 +1363,21 @@ async def cb_menu_choose(call: CallbackQuery):
         return await call.answer("Позиция меню не найдена.", show_alert=True)
     qty = await sheets_get_quantity_by_row(row_index)
     if qty <= 0:
-        client = await sheets_find_client(uid)
-        if client:
-            name = str(client.get("Имя", "")).strip()
-            phone = str(client.get("Номер телефона", "")).strip()
-            await sheets_append_overorder(uid, name, phone, dish)
-        return await call.answer("Увы, это блюдо уже закончилось на сегодня",
-                                 show_alert=True)
+        return await call.answer("Увы, это блюдо уже закончилось.", show_alert=True)
 
-    # Сохраняем выбор
-    await fsm.update_data(uid, chosen_dish=dish)
+    # Дешифруем «код» тарифа в человекочитаемое
+    code = call.data.split("tariff:", 1)[1]
+    mapping = {"max": "Максимум", "standard_plus": "Стандарт+", "standard": "Стандарт"}
+    tariff = mapping.get(code, code)
+
+    # Сохраняем в FSM
+    await fsm.update_data(uid, chosen_dish=dish, chosen_tariff=tariff)
     await fsm.set_state(uid, "choose_address")
 
-    # Клавиатура и ТЕКСТ
+    # Переходим к выбору адреса (всегда текстом, без фото)
     kb = kb_choose_address().as_markup()
-    text = f"Вы выбрали: \n<b>{h(dish)}</b>\n\nВыбери адрес доставки:"
+    text = f"Вы выбрали:\n<b>{h(dish)}</b>\nТариф: <b>{h(tariff)}</b>\n\nВыбери адрес доставки:"
 
-    # ❗️Всегда удаляем карточку (фото/текст) и шлём НОВОЕ текстовое сообщение
     try:
         await bot.delete_message(call.message.chat.id, call.message.message_id)
     except Exception:
