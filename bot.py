@@ -621,7 +621,10 @@ def kb_menu_navigation(can_switch: bool, include_tariffs: bool = True) -> Inline
         kb.row(
             InlineKeyboardButton(text="Максимум", callback_data="tariff:max"),
             InlineKeyboardButton(text="Стандарт+",  callback_data="tariff:standard_plus"),
-            InlineKeyboardButton(text="Стандарт", callback_data="tariff:standard"),
+        )
+        kb.row(
+            InlineKeyboardButton(text="Стандарт (+суп)", callback_data="tariff:standard_soup"),
+            InlineKeyboardButton(text="Стандарт (+салат)", callback_data="tariff:standard_salad"),
         )
 
     # Внизу — "Посмотреть всё меню"
@@ -898,12 +901,12 @@ async def show_menu_item(
     caption_lines = [
         f"<b>Блюдо дня</b>:\n{h(dish_name)}",
         "",
-        "<b>Тарифы</b>",
+        "<b>Тарифы:</b>",
         "• <b>Максимум</b> — горячее, суп, салат, напиток, фирменный соус: <b>15 р</b>",
-        "• <b>Стандарт</b> + — горячее, суп, салат: <b>13 р</b>",
-        "• <b>Стандарт</b> — горячее + суп или салат: <b>11 р</b>",
-
-
+        "• <b>Стандарт+</b>  — горячее, суп, салат: <b>13 р</b>",
+        "• <b>Стандарт</b> (+суп) — горячее + суп: <b>11 р</b>",
+        "• <b>Стандарт</b> (+салат) — горячее + салат: <b>11 р</b>",
+        ""
     ]
     if qty:
         caption_lines.append(f"Доступно: {h(qty)}")
@@ -1367,7 +1370,7 @@ async def cb_choose_tariff(call: CallbackQuery):
 
     # Дешифруем «код» тарифа в человекочитаемое
     code = call.data.split("tariff:", 1)[1]
-    mapping = {"max": "Максимум", "standard_plus": "Стандарт+", "standard": "Стандарт"}
+    mapping = {"max": "Максимум", "standard_plus": "Стандарт+", "standard_soup": "Стандарт (+суп)", "standard_salad": "Стандарт (+салат)"}
     tariff = mapping.get(code, code)
 
     # Сохраняем в FSM
