@@ -974,7 +974,7 @@ async def _show_confirm(uid: int, msg: Message):
     timeslot = data.get("chosen_time", "")
     qty = int(data.get("qty", 1))
 
-    pay_url = "https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-32175303933540515.005802BY5913UNP_2918581506007Belarus6304EDF0"
+    pay_url = "https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-2181530393354040.005802BY5913UNP_2918581506007Belarus63044DC0"
     kb = kb_confirm(payment_url=pay_url).as_markup()
 
     text = (
