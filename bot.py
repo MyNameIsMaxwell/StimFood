@@ -1004,7 +1004,7 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
     tariff = data.get("chosen_tariff", "")
     address = data.get("chosen_address")
     timeslot = data.get("chosen_time")
-    qty = int(data.get("chosen_qty", 1))
+    qty = int(data.get("qty", 1))
 
     # резерв порции
     ok, err = await reserve_portions_for_today(dish, qty)
