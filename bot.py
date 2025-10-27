@@ -1057,7 +1057,7 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
     # уведомление получателям
     note = (
         f"🧾 Новый заказ ({payment_label}):\n"
-        f"Имя: {h(name)}\nТелефон: {h(phone)}\nАдрес: {h(address)}\n"
+        f"Имя: {h(name)}\nТелефон: {h(phone)}\nАдрес: {h(address)}\nТариф: {h(tariff)}\nКоличество: {h(qty)}\n"
     )
     await notify_recipients(note)
 
