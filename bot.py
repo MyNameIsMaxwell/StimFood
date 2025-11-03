@@ -151,6 +151,15 @@ def msk_now_dt() -> datetime:
     # та же базовая идея, что и now_msk_str(), только возвращаем datetime
     return datetime.now() + timedelta(hours=3)
 
+def start_of_week_msk_dt() -> datetime:
+    dt = msk_now_dt()
+    # ISO: Monday=0 … Sunday=6
+    monday = dt - timedelta(days=dt.weekday())
+    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+
+def start_of_week_msk_str() -> str:
+    return start_of_week_msk_dt().strftime("%Y-%m-%d %H:%M:%S")
+
 def seconds_until_next_930_msk() -> float:
     now = msk_now_dt()
     target = now.replace(hour=9, minute=31, second=0, microsecond=0)
@@ -305,18 +314,18 @@ class GoogleSheetsClient:
                 return i + 1, record  # 1-based индекс строки
         return None, None
 
-        # проходим по строкам со второй (index=1) — это 2-я строка в таблице
-        for i in range(1, len(all_values)):
-            row = all_values[i]
-            if len(row) <= max(day_col, dish_col):
-                continue
-            if str(row[day_col]).strip() == str(day_name).strip() and str(row[dish_col]).strip() == str(
-                    dish_name).strip():
-                # собираем record по заголовкам (безопасно)
-                record = {headers[j]: (row[j] if j < len(row) else "") for j in range(len(headers))}
-                # индекс строки для gspread 1-based → i+1
-                return i + 1, record
-        return None, None
+        # # проходим по строкам со второй (index=1) — это 2-я строка в таблице
+        # for i in range(1, len(all_values)):
+        #     row = all_values[i]
+        #     if len(row) <= max(day_col, dish_col):
+        #         continue
+        #     if str(row[day_col]).strip() == str(day_name).strip() and str(row[dish_col]).strip() == str(
+        #             dish_name).strip():
+        #         # собираем record по заголовкам (безопасно)
+        #         record = {headers[j]: (row[j] if j < len(row) else "") for j in range(len(headers))}
+        #         # индекс строки для gspread 1-based → i+1
+        #         return i + 1, record
+        # return None, None
 
     def get_quantity_by_row(self, row_index: int) -> int:
         ws = self.ws_menu()
@@ -1101,9 +1110,12 @@ async def cmd_support(message: Message):
 
 @router.message(Command("info"))
 async def cmd_info(message: Message):
-    await message.answer("""Доставка 🚚 в Катин Бор на проходную в 11.50. 
-На Дубровскую  на проходную в 12.10
+    await message.answer("""<b>Доставка</b> 🚚
+В Катин Бор на проходную в 11.50
+На Дубровскую на проходную в 12.10
 На Цельсий в холе в 12.00
+<b>Оплата:</b>
+ЕРИП - Сервис E-POS - Ввести номер лицевого счета ( 29286-1-2181 ) - ввести ФИО и сумму
 Приятного аппетита 😋""")
 
 
@@ -1536,8 +1548,10 @@ async def cb_show_menu_again(call: CallbackQuery):
 
 @router.callback_query(F.data == "menu_show_week")
 async def cb_menu_show_week(call: CallbackQuery):
-    # берём «сегодня» как старт
-    start = now_msk_str()
+    # # берём «сегодня» как старт
+    # start = now_msk_str()
+    # старт — понедельник текущей недели, 00:00 МСК
+    start = start_of_week_msk_str()
     items = await sheets_get_week_menu(start, days=7)
     if not items:
         await call.answer("Меню на неделю отсутствует", show_alert=True)
@@ -1548,9 +1562,10 @@ async def cb_menu_show_week(call: CallbackQuery):
         day = extract_ddmmyyyy(str(it.get("День", "")))
         wd = weekday_ru_from_ddmmyyyy(day)
         dish = str(it.get("Блюда", "")).strip()
-        lines.append(f"<b>{day} ({wd}):</b> \n {h(dish)}")
+        # lines.append(f"<b>{day} ({wd}):</b> \n {h(dish)}")
+        lines.append(f"<b>{wd}:</b> \n {h(dish)}")
 
-    text = "<b>Меню на неделю</b>:\n" + "\n".join(lines)
+    text = "<b>Меню на неделю</b>:\n" + "\n\n".join(lines)
 
     # Клавиатура: кнопка «Назад»
     kb = InlineKeyboardBuilder()
@@ -1635,7 +1650,7 @@ async def on_startup():
         BotCommand(command="start", description="Начать / регистрация"),
         BotCommand(command="menu", description="Показать меню на сегодня"),
         BotCommand(command="support", description="Связаться с нами"),
-        BotCommand(command="info", description="Инфо о доставке"),
+        BotCommand(command="info", description="Инфо о доставке и оплате"),
     ])
     # Явно выставим тип меню как Commands (на всякий случай)
     try:
