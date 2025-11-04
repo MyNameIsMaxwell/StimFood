@@ -1378,6 +1378,11 @@ async def cb_choose_tariff(call: CallbackQuery):
         return await call.answer("Позиция меню не найдена.", show_alert=True)
     qty = await sheets_get_quantity_by_row(row_index)
     if qty <= 0:
+        client = await sheets_find_client(uid)
+        if client:
+            name = str(client.get("Имя", "")).strip()
+            phone = str(client.get("Номер телефона", "")).strip()
+            await sheets_append_overorder(uid, name, phone, dish)
         return await call.answer("Увы, это блюдо уже закончилось.", show_alert=True)
 
     # Дешифруем «код» тарифа в человекочитаемое
