@@ -52,7 +52,7 @@ from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
 
 # ---------- Константы настройки ----------
-ADDRESS_OPTIONS = ["Цельсий", "Дубровская(СТиМ)", "Катин Бор(СТиМ)", "Катин Бор(Gefest)"]
+ADDRESS_OPTIONS = ["Цельсий", "Дубровская(СТиМ)", "Катин Бор(СТиМ)", "БОНШЕ"]
 TIME_SLOTS = ["12-13", "13-14"]
 
 DB_PATH = "fsm.sqlite3"
@@ -619,7 +619,6 @@ def kb_menu_navigation(can_switch: bool, include_tariffs: bool = True) -> Inline
     # Стрелки
     if can_switch:
         kb.button(text="◀️", callback_data="menu_prev")
-    # Раньше здесь была кнопка "Заказать" — её больше нет
     if can_switch:
         kb.button(text="▶️", callback_data="menu_next")
     if can_switch:
