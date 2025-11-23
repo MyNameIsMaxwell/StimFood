@@ -676,7 +676,7 @@ def kb_confirm(payment_url: str | None = None) -> InlineKeyboardBuilder:
     kb.row(InlineKeyboardButton(text="✅ Всё верно, оплатить при получении", callback_data="confirm_cash"))
 
     if payment_url:
-        kb.row(InlineKeyboardButton(text="💳 Всё верно, оплатить онлайн", url=payment_url))
+        kb.row(InlineKeyboardButton(text="💳 Всё верно, оплатить онлайн (полное ФИО)", url=payment_url))
         kb.row(InlineKeyboardButton(text="✅ Я оплатил онлайн", callback_data="confirm_paid"))
 
     kb.row(InlineKeyboardButton(text="Назад", callback_data="back:time"))
@@ -1065,7 +1065,7 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
     # уведомление получателям
     note = (
         f"🧾 Новый заказ ({payment_label}):\n"
-        f"Имя: {h(name)}\nТелефон: {h(phone)}\nАдрес: {h(address)}\nТариф: {h(tariff)}\nКоличество: {qty}\n"
+        f"Имя: {h(name)}\nТелефон: {h(phone)}\nАдрес: {h(address)}\nТариф: {h(tariff)}\nКоличество: {qty}\nВремя доставки: {timeslot}\n"
     )
     await notify_recipients(note)
 
