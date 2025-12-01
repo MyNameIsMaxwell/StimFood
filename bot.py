@@ -1700,13 +1700,13 @@ async def daily_930_broadcast_task():
             if not ids:
                 continue
 
-            # # аккуратно рассылаем
-            # for uid in ids:
-            #     try:
-            #         await bot.send_message(uid, text_to_send)
-            #     except Exception:
-            #         pass
-            #     await asyncio.sleep(0.05)  # мягкий троттлинг
+            # аккуратно рассылаем
+            for uid in ids:
+                try:
+                    await bot.send_message(uid, text_to_send)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.05)  # мягкий троттлинг
         except Exception:
             # чтобы цикл не умер на исключении
             await asyncio.sleep(5)
