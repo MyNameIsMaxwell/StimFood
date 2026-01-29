@@ -47,6 +47,7 @@ from aiogram.types import (
     MenuButtonCommands
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+from aiohttp import ClientSession, ClientError
 import gspread
 from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
@@ -64,6 +65,11 @@ GSHEET_ID = os.getenv("GSHEET_ID")
 SERVICE_ACCOUNT_JSON_PATH = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 SERVICE_ACCOUNT_INFO = os.getenv("GOOGLE_SERVICE_ACCOUNT_INFO")  # альтернатива пути
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0") or 0)
+
+CRM_ENABLED = os.getenv("CRM_ENABLED")
+CRM_ENDPOINT = os.getenv("CRM_ENDPOINT")
+CRM_IDENTIFIER = os.getenv("CRM_IDENTIFIER")
+CRM_WEBAPI_KEY = os.getenv("CRM_WEBAPI_KEY")
 
 # список дополнительных получателей уведомлений
 _raw = os.getenv("NOTIFY_IDS", "") or ""
@@ -450,6 +456,57 @@ async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str
     )
 
 
+async def crm_send_order(
+    name: str,
+    phone: str,
+    address: str,
+    timeslot: str,
+    dish: str,
+    qty: int,
+    payment_label: str,
+    tariff: str = "",
+) -> bool:
+    """
+    Отправляет заказ в CRM. Возвращает True/False (успех/неуспех).
+    Не бросает исключения наружу — логирует и молча возвращает False.
+    """
+    if not CRM_ENABLED:
+        return False
+    if not (CRM_ENDPOINT and CRM_IDENTIFIER and CRM_WEBAPI_KEY):
+        logging.warning("CRM is enabled, but credentials are not set")
+        return False
+
+    # Формируем x-www-form-urlencoded
+    payload = {
+        "identifier": CRM_IDENTIFIER,
+        "webApiKey": CRM_WEBAPI_KEY,
+        "name": name,
+        "phone": phone,
+        "address_text": address,
+        "is_retail_order": 1,
+        "additional[Тариф]": tariff,
+        "additional[Кол-во]": qty,
+        "additional[Время доставки]": timeslot,
+        "additional[Оплата]": payment_label,
+    }
+
+    try:
+        async with ClientSession() as session:
+            async with session.post(CRM_ENDPOINT, data=payload, timeout=20) as resp:
+                # CRM обычно отвечает 200/2xx на успех
+                ok = 200 <= resp.status < 300
+                if not ok:
+                    body = await resp.text()
+                    logging.error("CRM responded %s: %s", resp.status, body[:500])
+                return ok
+    except ClientError as e:
+        logging.exception("CRM request failed: %s", e)
+        return False
+    except Exception as e:
+        logging.exception("Unexpected CRM error: %s", e)
+        return False
+
+
 async def reserve_portions_for_today(dish_name: str, qty: int) -> tuple[bool, str | None]:
     """
     Уменьшает Количество на qty для сегодняшнего дня и указанного блюда.
@@ -702,6 +759,75 @@ def normalize_photo_url(url: str) -> str:
         return f"https://drive.google.com/uc?export=download&id={file_id}"
 
     return url
+
+def _strip_header_line(text: str) -> list[str]:
+    """Убираем 'Блюдо дня:' и пустые строки, сохраняем эмодзи и регистр."""
+    lines = [ln.strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln]  # non-empty
+    if lines and re.match(r"^Блюдо дня[:：]?\s*$", lines[0], flags=re.IGNORECASE):
+        lines = lines[1:]
+    return lines
+
+def split_menu_components(dish_text: str) -> dict:
+    """
+    Возвращает {'soup','hot','salad','drink','other'} -> str|None
+    Простая эвристика по ключевым словам.
+    """
+    soup_kw   = ("суп",)
+    salad_kw  = ("салат",)
+    drink_kw  = ("морс", "компот", "напит", "сок", "чай", "кофе", "лимонад")
+
+    parts = {"soup": None, "hot": None, "salad": None, "drink": None, "other": []}
+    for ln in _strip_header_line(dish_text):
+        low = ln.lower()
+        if any(k in low for k in soup_kw) and parts["soup"] is None:
+            parts["soup"] = ln
+        elif any(k in low for k in salad_kw) and parts["salad"] is None:
+            parts["salad"] = ln
+        elif any(k in low for k in drink_kw) and parts["drink"] is None:
+            parts["drink"] = ln
+        else:
+            # считаем «горячим», если ещё не было
+            if parts["hot"] is None:
+                parts["hot"] = ln
+            else:
+                parts["other"].append(ln)
+    return parts
+
+def format_selection_for_tariff(dish_text: str, tariff: str) -> str:
+    """
+    Собирает строки под выбранный тариф.
+    Порядок — суп → горячее → салат → напиток (как ты просил).
+    """
+    p = split_menu_components(dish_text)
+
+    # что включаем по тарифам
+    want = []
+    t = tariff.lower()
+    if "максимум" in t:
+        want = ["soup", "hot", "salad", "drink"]
+    elif "стандарт+" in t:
+        want = ["soup", "hot", "salad"]
+    elif "суп" in t:
+        want = ["soup", "hot"]
+    elif "салат" in t:
+        want = ["hot", "salad"]
+    else:
+        # дефолт: только горячее
+        want = ["hot"]
+
+    ordered = []
+    order = ["soup", "hot", "salad", "drink"]
+    # соблюдаем глобальный порядок, но берём только нужные
+    for key in order:
+        if key in want and p.get(key):
+            ordered.append(p[key])
+
+    # если вдруг ничего не распознали — покажем весь текст без заголовка
+    if not ordered:
+        ordered = _strip_header_line(dish_text)
+
+    return "\n".join(ordered)
 
 
 # ---- Сервисные шаги ----
@@ -1039,16 +1165,31 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
 
     name = str(client.get("Имя", "")).strip()
     phone = str(client.get("Номер телефона", "")).strip()
+    picked = format_selection_for_tariff(dish, tariff)
 
     # запись в Заказы (с логом)
     try:
-        await sheets_append_order(uid, name, phone, dish, tariff, address, timeslot, qty, payment_label,)
+        await sheets_append_order(uid, name, phone, picked, tariff, address, timeslot, qty, payment_label,)
     except Exception as e:
         # откат резерва, алерт и лог
         await release_portions_for_today(dish, qty)
         logging.exception("Не удалось сохранить заказ в Sheets: %s", e)
         await call.answer("Не удалось сохранить заказ. Попробуй позже.", show_alert=True)
         return
+
+    try:
+        await crm_send_order(
+            name=name,
+            phone=phone,
+            address=address,
+            timeslot=timeslot,
+            dish=dish,
+            qty=qty,
+            payment_label=payment_label,
+            tariff=tariff,
+        )
+    except Exception as e:
+        logging.exception("crm_send_order unexpected error: %s", e)
 
     # обновляем локальный кеш количества
     local = await fsm.get_data(uid)
@@ -1393,9 +1534,12 @@ async def cb_choose_tariff(call: CallbackQuery):
     await fsm.update_data(uid, chosen_dish=dish, chosen_tariff=tariff)
     await fsm.set_state(uid, "choose_address")
 
+    # Формируем подборку строк под выбранный тариф
+    picked = format_selection_for_tariff(dish, tariff)
+
     # Переходим к выбору адреса (всегда текстом, без фото)
     kb = kb_choose_address().as_markup()
-    text = f"Вы выбрали:\n<b>{h(dish)}</b>\nТариф: <b>{h(tariff)}</b>\n\nВыбери адрес доставки:"
+    text = f"Вы выбрали:\n<b>{h(picked)}</b>\nТариф: <b>{h(tariff)}</b>\n\nВыбери адрес доставки:"
 
     try:
         await bot.delete_message(call.message.chat.id, call.message.message_id)
