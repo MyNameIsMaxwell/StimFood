@@ -484,7 +484,7 @@ async def crm_send_order(
         "phone": phone,
         "address_text": address,
         "is_retail_order": 1,
-        "additional[Тариф]": tariff,
+        "comment": tariff,
         "additional[Кол-во]": qty,
         "additional[Время доставки]": timeslot,
         "additional[Оплата]": payment_label,
