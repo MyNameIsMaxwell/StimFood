@@ -476,6 +476,13 @@ async def crm_send_order(
         logging.warning("CRM is enabled, but credentials are not set")
         return False
 
+    comment = "\n".join([
+        str(tariff or ""),
+        str(qty or ""),
+        str(timeslot or ""),
+        str(payment_label or ""),
+    ]).strip()
+
     # Формируем x-www-form-urlencoded
     payload = {
         "identifier": CRM_IDENTIFIER,
@@ -484,10 +491,10 @@ async def crm_send_order(
         "phone": phone,
         "address_text": address,
         "is_retail_order": 1,
-        "comment": tariff,
-        "additional[Кол-во]": qty,
-        "additional[Время доставки]": timeslot,
-        "additional[Оплата]": payment_label,
+        "comment": comment,
+        # "additional[Кол-во]": qty,
+        # "additional[Время доставки]": timeslot,
+        # "additional[Оплата]": payment_label,
     }
 
     try:
