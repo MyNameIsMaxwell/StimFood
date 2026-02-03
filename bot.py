@@ -777,29 +777,19 @@ def _strip_header_line(text: str) -> list[str]:
 
 def split_menu_components(dish_text: str) -> dict:
     """
-    Возвращает {'soup','hot','salad','drink','other'} -> str|None
-    Простая эвристика по ключевым словам.
-    """
-    soup_kw   = ("суп",)
-    salad_kw  = ("салат",)
-    drink_kw  = ("морс", "компот", "напит", "сок", "чай", "кофе", "лимонад")
+     КЛАССИФИКАЦИЯ ПО ПОЗИЦИИ (а не по словам).
+     Ожидаемый порядок: [0]=суп, [1]=горячее, [2]=салат, [3]=напиток.
+     Если строк меньше/больше — берём доступные и лишние уводим в 'other'.
+     """
+    lines = _strip_header_line(dish_text)
 
-    parts = {"soup": None, "hot": None, "salad": None, "drink": None, "other": []}
-    for ln in _strip_header_line(dish_text):
-        low = ln.lower()
-        if any(k in low for k in soup_kw) and parts["soup"] is None:
-            parts["soup"] = ln
-        elif any(k in low for k in salad_kw) and parts["salad"] is None:
-            parts["salad"] = ln
-        elif any(k in low for k in drink_kw) and parts["drink"] is None:
-            parts["drink"] = ln
-        else:
-            # считаем «горячим», если ещё не было
-            if parts["hot"] is None:
-                parts["hot"] = ln
-            else:
-                parts["other"].append(ln)
-    return parts
+    soup = lines[0] if len(lines) > 0 else None
+    hot = lines[1] if len(lines) > 1 else None
+    salad = lines[2] if len(lines) > 2 else None
+    drink = lines[3] if len(lines) > 3 else None
+    other = lines[4:] if len(lines) > 4 else []
+
+    return {"soup": soup, "hot": hot, "salad": salad, "drink": drink, "other": other}
 
 def format_selection_for_tariff(dish_text: str, tariff: str) -> str:
     """
