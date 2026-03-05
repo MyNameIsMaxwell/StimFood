@@ -1105,7 +1105,7 @@ async def _show_confirm(uid: int, msg: Message):
     timeslot = data.get("chosen_time", "")
     qty = int(data.get("qty", 1))
 
-    pay_url = "https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-2181530393354040.005802BY5913UNP_2918581506007Belarus63044DC0"
+    pay_url = "https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-6599530393354040.005802BY5913UNP_2918581506007Belarus6304D87F"
     kb = kb_confirm(payment_url=pay_url).as_markup()
 
     text = (
@@ -1252,7 +1252,7 @@ async def cmd_info(message: Message):
 На Дубровскую на проходную в 12.10
 На Цельсий в холе в 12.00
 <b>Оплата:</b>
-ЕРИП - Сервис E-POS - Ввести номер лицевого счета ( 29286-1-2181 ) - ввести ФИО и сумму
+ЕРИП - Сервис E-POS - Ввести номер лицевого счета ( 29286-1-6599 ) - ввести ФИО и сумму
 Приятного аппетита 😋""")
 
 
