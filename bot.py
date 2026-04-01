@@ -148,14 +148,13 @@ def extract_ddmmyyyy(s: str) -> str:
     return datetime.now().strftime("%d.%m.%Y")
 
 def now_msk_str() -> str:
-    return (datetime.now() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def h(s: str) -> str:
     return html.escape(s or "", quote=False)
 
 def msk_now_dt() -> datetime:
-    # та же базовая идея, что и now_msk_str(), только возвращаем datetime
-    return datetime.now() + timedelta(hours=3)
+    return datetime.now()
 
 def start_of_week_msk_dt() -> datetime:
     dt = msk_now_dt()
@@ -457,6 +456,7 @@ async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str
 
 
 async def crm_send_order(
+    user_id: int,
     name: str,
     phone: str,
     address: str,
@@ -478,23 +478,21 @@ async def crm_send_order(
 
     comment = "\n".join([
         str(tariff or ""),
+        str(dish or ""),
         str(qty or ""),
         str(timeslot or ""),
         str(payment_label or ""),
     ]).strip()
 
-    # Формируем x-www-form-urlencoded
     payload = {
         "identifier": CRM_IDENTIFIER,
         "webApiKey": CRM_WEBAPI_KEY,
+        "user_id": str(user_id),
         "name": name,
         "phone": phone,
         "address_text": address,
         "is_retail_order": 1,
         "comment": comment,
-        # "additional[Кол-во]": qty,
-        # "additional[Время доставки]": timeslot,
-        # "additional[Оплата]": payment_label,
     }
 
     try:
@@ -1176,11 +1174,12 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
 
     try:
         await crm_send_order(
+            user_id=uid,
             name=name,
             phone=phone,
             address=address,
             timeslot=timeslot,
-            dish=dish,
+            dish=picked,
             qty=qty,
             payment_label=payment_label,
             tariff=tariff,
