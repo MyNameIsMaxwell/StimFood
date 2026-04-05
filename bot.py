@@ -728,6 +728,7 @@ def kb_choose_qty() -> InlineKeyboardBuilder:
         InlineKeyboardButton(text="2", callback_data="qty:2"),
         InlineKeyboardButton(text="Больше", callback_data="qty:more")
     )
+    kb.row(InlineKeyboardButton(text="5+1🎁", callback_data="qty:6"))
     kb.row(InlineKeyboardButton(text="Назад", callback_data="back:time"))
     return kb
 
@@ -792,7 +793,7 @@ def split_menu_components(dish_text: str) -> dict:
 def format_selection_for_tariff(dish_text: str, tariff: str) -> str:
     """
     Собирает строки под выбранный тариф.
-    Порядок — суп → горячее → салат → напиток (как ты просил).
+    Порядок — суп → горячее → салат → напиток.
     """
     p = split_menu_components(dish_text)
 
@@ -1031,10 +1032,10 @@ async def show_menu_item(
         f"<b>Блюдо дня</b>:\n{h(dish_name)}",
         "",
         "<b>Тарифы:</b>",
-        "• <b>Максимум</b> — горячее, суп, салат, напиток, фирменный соус: <b>15 р</b>",
-        "• <b>Стандарт+</b>  — горячее, суп, салат: <b>13 р</b>",
-        "• <b>Стандарт</b> (+суп) — горячее + суп: <b>11 р</b>",
-        "• <b>Стандарт</b> (+салат) — горячее + салат: <b>11 р</b>",
+        "• <b>Максимум</b> — горячее, суп, салат, напиток, фирменный соус: <b>16 р</b>",
+        "• <b>Стандарт+</b>  — горячее, суп, салат: <b>14 р</b>",
+        "• <b>Стандарт</b> (+суп) — горячее + суп: <b>12 р</b>",
+        "• <b>Стандарт</b> (+салат) — горячее + салат: <b>12 р</b>",
         ""
     ]
     if qty:
@@ -1106,12 +1107,28 @@ async def _show_confirm(uid: int, msg: Message):
     pay_url = "https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-6599530393354040.005802BY5913UNP_2918581506007Belarus6304D87F"
     kb = kb_confirm(payment_url=pay_url).as_markup()
 
+    # Определяем цену за единицу по выбранному тарифу
+    t = (tariff or "").lower()
+    if "максимум" in t:
+        unit_price = 16
+    elif "стандарт+" in t:
+        unit_price = 14
+    elif "суп" in t or "салат" in t:
+        unit_price = 12
+    else:
+        unit_price = 0
+
+    # Акция 5+1: если выбрано 6 порций, оплачивается как за 5
+    billable_qty = 5 if qty == 6 else qty
+    total_price = unit_price * billable_qty if unit_price else 0
+
     text = (
         "Проверь заказ:\n"
         f"• Тариф: <b>{h(tariff)}</b>\n" 
         f"• Адрес: <b>{h(address)}</b>\n"
         f"• Время: <b>{h(timeslot)}</b>\n"
-        f"• Количество: <b>{qty}</b>\n\n"
+        f"• Количество: <b>{qty}</b>\n"
+        f"• Стоимость: <b>{total_price} р</b>\n\n"
         "Подтвердить заказ?"
     )
 
