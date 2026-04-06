@@ -148,14 +148,13 @@ def extract_ddmmyyyy(s: str) -> str:
     return datetime.now().strftime("%d.%m.%Y")
 
 def now_msk_str() -> str:
-    return (datetime.now() + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def h(s: str) -> str:
     return html.escape(s or "", quote=False)
 
 def msk_now_dt() -> datetime:
-    # та же базовая идея, что и now_msk_str(), только возвращаем datetime
-    return datetime.now() + timedelta(hours=3)
+    return datetime.now()
 
 def start_of_week_msk_dt() -> datetime:
     dt = msk_now_dt()
@@ -457,6 +456,7 @@ async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str
 
 
 async def crm_send_order(
+    user_id: int,
     name: str,
     phone: str,
     address: str,
@@ -478,23 +478,21 @@ async def crm_send_order(
 
     comment = "\n".join([
         str(tariff or ""),
+        str(dish or ""),
         str(qty or ""),
         str(timeslot or ""),
         str(payment_label or ""),
     ]).strip()
 
-    # Формируем x-www-form-urlencoded
     payload = {
         "identifier": CRM_IDENTIFIER,
         "webApiKey": CRM_WEBAPI_KEY,
+        "user_id": str(user_id),
         "name": name,
         "phone": phone,
         "address_text": address,
         "is_retail_order": 1,
         "comment": comment,
-        # "additional[Кол-во]": qty,
-        # "additional[Время доставки]": timeslot,
-        # "additional[Оплата]": payment_label,
     }
 
     try:
@@ -730,6 +728,7 @@ def kb_choose_qty() -> InlineKeyboardBuilder:
         InlineKeyboardButton(text="2", callback_data="qty:2"),
         InlineKeyboardButton(text="Больше", callback_data="qty:more")
     )
+    kb.row(InlineKeyboardButton(text="5+1🎁", callback_data="qty:6"))
     kb.row(InlineKeyboardButton(text="Назад", callback_data="back:time"))
     return kb
 
@@ -794,7 +793,7 @@ def split_menu_components(dish_text: str) -> dict:
 def format_selection_for_tariff(dish_text: str, tariff: str) -> str:
     """
     Собирает строки под выбранный тариф.
-    Порядок — суп → горячее → салат → напиток (как ты просил).
+    Порядок — суп → горячее → салат → напиток.
     """
     p = split_menu_components(dish_text)
 
@@ -1033,10 +1032,10 @@ async def show_menu_item(
         f"<b>Блюдо дня</b>:\n{h(dish_name)}",
         "",
         "<b>Тарифы:</b>",
-        "• <b>Максимум</b> — горячее, суп, салат, напиток, фирменный соус: <b>15 р</b>",
-        "• <b>Стандарт+</b>  — горячее, суп, салат: <b>13 р</b>",
-        "• <b>Стандарт</b> (+суп) — горячее + суп: <b>11 р</b>",
-        "• <b>Стандарт</b> (+салат) — горячее + салат: <b>11 р</b>",
+        "• <b>Максимум</b> — горячее, суп, салат, напиток, фирменный соус: <b>16 р</b>",
+        "• <b>Стандарт+</b>  — горячее, суп, салат: <b>14 р</b>",
+        "• <b>Стандарт</b> (+суп) — горячее + суп: <b>12 р</b>",
+        "• <b>Стандарт</b> (+салат) — горячее + салат: <b>12 р</b>",
         ""
     ]
     if qty:
@@ -1108,12 +1107,28 @@ async def _show_confirm(uid: int, msg: Message):
     pay_url = "https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-6599530393354040.005802BY5913UNP_2918581506007Belarus6304D87F"
     kb = kb_confirm(payment_url=pay_url).as_markup()
 
+    # Определяем цену за единицу по выбранному тарифу
+    t = (tariff or "").lower()
+    if "максимум" in t:
+        unit_price = 16
+    elif "стандарт+" in t:
+        unit_price = 14
+    elif "суп" in t or "салат" in t:
+        unit_price = 12
+    else:
+        unit_price = 0
+
+    # Акция 5+1: если выбрано 6 порций, оплачивается как за 5
+    billable_qty = 5 if qty == 6 else qty
+    total_price = unit_price * billable_qty if unit_price else 0
+
     text = (
         "Проверь заказ:\n"
         f"• Тариф: <b>{h(tariff)}</b>\n" 
         f"• Адрес: <b>{h(address)}</b>\n"
         f"• Время: <b>{h(timeslot)}</b>\n"
-        f"• Количество: <b>{qty}</b>\n\n"
+        f"• Количество: <b>{qty}</b>\n"
+        f"• Стоимость: <b>{total_price} р</b>\n\n"
         "Подтвердить заказ?"
     )
 
@@ -1176,11 +1191,12 @@ async def _finalize_order(call: CallbackQuery, payment_label: str):
 
     try:
         await crm_send_order(
+            user_id=uid,
             name=name,
             phone=phone,
             address=address,
             timeslot=timeslot,
-            dish=dish,
+            dish=picked,
             qty=qty,
             payment_label=payment_label,
             tariff=tariff,

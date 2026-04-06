@@ -4,7 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="7ba33961-acf6-4a84-8c61-d1b1ae4c73b2" name="Changes" comment="обновление gitignore" />
+    <list default="true" id="7ba33961-acf6-4a84-8c61-d1b1ae4c73b2" name="Changes" comment="(add ФИО and timeslot)">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -132,7 +134,63 @@
       <option name="project" value="LOCAL" />
       <updated>1759260038302</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="Vibecoding updates">
+      <option name="closed" value="true" />
+      <created>1759423706339</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1759423706339</updated>
+    </task>
+    <task id="LOCAL-00006" summary="Vibecoding updates (added autoposting)">
+      <option name="closed" value="true" />
+      <created>1759952444612</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1759952444612</updated>
+    </task>
+    <task id="LOCAL-00007" summary="(added new delivery adress)">
+      <option name="closed" value="true" />
+      <created>1760266873770</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1760266873770</updated>
+    </task>
+    <task id="LOCAL-00008" summary="(added new tarrifs)">
+      <option name="closed" value="true" />
+      <created>1760898209823</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1760898209823</updated>
+    </task>
+    <task id="LOCAL-00009" summary="(added new tariff)">
+      <option name="closed" value="true" />
+      <created>1760899843195</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1760899843195</updated>
+    </task>
+    <task id="LOCAL-00010" summary="(switch Gefest to БОНШЕ)">
+      <option name="closed" value="true" />
+      <created>1762709944606</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1762709944611</updated>
+    </task>
+    <task id="LOCAL-00011" summary="(add ФИО and timeslot)">
+      <option name="closed" value="true" />
+      <created>1763899883756</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1763899883757</updated>
+    </task>
+    <option name="localTasksCounter" value="12" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -150,20 +208,36 @@
     <MESSAGE value="Vibecoding shit" />
     <MESSAGE value="Vibecoding some update" />
     <MESSAGE value="Vibecoding updates" />
-    <option name="LAST_COMMIT_MESSAGE" value="Vibecoding updates" />
+    <MESSAGE value="Vibecoding updates (added autoposting)" />
+    <MESSAGE value="(added new delivery adress)" />
+    <MESSAGE value="(added new tarrifs)" />
+    <MESSAGE value="(added new tariff)" />
+    <MESSAGE value="(switch Gefest to БОНШЕ)" />
+    <MESSAGE value="(add ФИО and timeslot)" />
+    <option name="LAST_COMMIT_MESSAGE" value="(add ФИО and timeslot)" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/bot.py</url>
-          <line>843</line>
+          <line>1004</line>
           <option name="timeStamp" value="2" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/bot.py</url>
-          <line>253</line>
+          <line>289</line>
           <option name="timeStamp" value="6" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/bot.py</url>
+          <line>1816</line>
+          <option name="timeStamp" value="7" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/bot.py</url>
+          <line>1198</line>
+          <option name="timeStamp" value="8" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
