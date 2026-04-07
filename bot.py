@@ -24,7 +24,7 @@ import re
 import html
 import logging
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import aiosqlite
@@ -154,7 +154,7 @@ def h(s: str) -> str:
     return html.escape(s or "", quote=False)
 
 def msk_now_dt() -> datetime:
-    return datetime.now()
+    return datetime.now(timezone(timedelta(hours=3))).replace(tzinfo=None)
 
 def start_of_week_msk_dt() -> datetime:
     dt = msk_now_dt()
