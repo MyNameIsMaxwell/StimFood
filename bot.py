@@ -148,7 +148,7 @@ def extract_ddmmyyyy(s: str) -> str:
     return datetime.now().strftime("%d.%m.%Y")
 
 def now_msk_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone(timedelta(hours=3))).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
 def h(s: str) -> str:
     return html.escape(s or "", quote=False)
