@@ -420,10 +420,11 @@ async def _finalize_subscription(call: CallbackQuery, payment_label: str):
         user_id=uid, name=name, phone=phone, tariff=tariff, address=address, timeslot=timeslot,
         days=days, total_price=total_price, payment_label=payment_label
     )
+    kb = kb_show_menu_again().as_markup()
     try:
-        await call.message.edit_text("Спасибо! Подписка оформлена ✅", parse_mode="HTML")
+        await call.message.edit_text("Спасибо! Подписка оформлена ✅", reply_markup=kb, parse_mode="HTML")
     except TelegramBadRequest:
-        await bot.send_message(call.message.chat.id, "Спасибо! Подписка оформлена ✅", parse_mode="HTML")
+        await bot.send_message(call.message.chat.id, "Спасибо! Подписка оформлена ✅", reply_markup=kb, parse_mode="HTML")
     await fsm.set_state(uid, "menu")
     await call.answer()
 

@@ -3,7 +3,7 @@ import asyncio
 import logging
 from app import bot
 from app.sheets import sheets_get_menu, sheets_get_all_client_ids
-from app.utils import msk_now_dt, now_msk_str, seconds_until_next_930_msk, format_menu_for_broadcast
+from app.utils import msk_now_dt, now_msk_str, seconds_until_next_930_msk, format_menu_for_broadcast, h
 from app.services import process_auto_orders
 
 
@@ -27,18 +27,18 @@ async def daily_930_broadcast_task():
             if not menu_text.strip():
                 continue
             templates = [
-                "В меню:\n{menu}\n\nКоличество ограничено 😋",
-                "Сегодня в меню:\n{menu}\n\nУспей заказать. Количество ограничено 😋",
-                "Сегодня у нас в меню:\n{menu}\n\nУспей заказать 😋",
+                "В меню:\n{menu}\n\n<b>Попробуй новинку</b>:\n🎁<b> 5+1</b>: шестой обед в подарок при заказе от 5 тарифов в одной доставке.\n🤖 <b>«Умный заказ»</b> — подписка за 2 клика\n\nКоличество ограничено 😋",
+                "Сегодня в меню:\n{menu}\n\n<b>Попробуй новинку</b>:\n🎁<b> 5+1</b>: шестой обед в подарок при заказе от 5 тарифов в одной доставке.\n🤖 <b>«Умный заказ»</b> — подписка за 2 клика\n\nУспей заказать. Количество ограничено 😋",
+                "Сегодня у нас в меню:\n{menu}\n\n<b>Попробуй новинку</b>:\n🎁<b> 5+1</b>: шестой обед в подарок при заказе от 5 тарифов в одной доставке.\n🤖 <b>«Умный заказ»</b> — подписка за 2 клика\n\nУспей заказать 😋",
             ]
             import random
-            text_to_send = random.choice(templates).format(menu=menu_text)
+            text_to_send = random.choice(templates).format(menu=h(menu_text))
             ids = await sheets_get_all_client_ids()
             if not ids:
                 continue
             for uid in ids:
                 try:
-                    await bot.send_message(uid, text_to_send)
+                    await bot.send_message(uid, text_to_send, parse_mode="HTML")
                 except Exception:
                     pass
                 await asyncio.sleep(0.05)
