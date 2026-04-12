@@ -42,6 +42,37 @@ class GoogleSheetsClient:
     def ws_overorders(self):
         return self._sh.worksheet("Заказы свыше")
 
+    def ws_polls(self):
+        try:
+            return self._sh.worksheet("Опросы")
+        except Exception:
+            ws = self._sh.add_worksheet(title="Опросы", rows=1000, cols=10)
+            # Initialize headers
+            try:
+                ws.update("A1:F1", [["Дата", "chat_id", "Имя", "Username", "Вопрос", "Ответ"]])
+            except Exception:
+                pass
+            return ws
+
+    # Subscriptions
+    def ws_subscriptions(self):
+        try:
+            return self._sh.worksheet("Подписки")
+        except Exception:
+            ws = self._sh.add_worksheet(title="Подписки", rows=2000, cols=20)
+            try:
+                ws.update(
+                    "A1:L1",
+                    [[
+                        "Дата оформления", "user_id", "Имя", "Телефон",
+                        "Тариф", "Адрес", "Время", "Дней",
+                        "Осталось дней", "Стоимость", "Оплата", "Статус"
+                    ]]
+                )
+            except Exception:
+                pass
+            return ws
+
     # Clients
     def find_client(self, telegram_id: int) -> Optional[Dict[str, Any]]:
         ws = self.ws_clients()
@@ -204,6 +235,107 @@ class GoogleSheetsClient:
                     pass
         return ids
 
+    # ---- Subscription operations ----
+    def append_subscription(self, date_str: str, user_id: int, name: str, phone: str,
+                            tariff: str, address: str, timeslot: str,
+                            days: int, remaining: int, total_price: int,
+                            payment_label: str, status: str = "активна"):
+        ws = self.ws_subscriptions()
+        ws.append_row(
+            [
+                date_str, str(user_id), name, phone,
+                tariff, address, timeslot, int(days),
+                int(remaining), int(total_price), payment_label, status
+            ],
+            value_input_option="USER_ENTERED",
+        )
+
+    def get_active_subscriptions(self) -> List[dict]:
+        ws = self.ws_subscriptions()
+        values = ws.get_all_values()
+        if not values:
+            return []
+        headers = values[0]
+        items: List[dict] = []
+        for i in range(1, len(values)):
+            row = values[i]
+            rec = {headers[j]: (row[j] if j < len(row) else "") for j in range(len(headers))}
+            status = str(rec.get("Статус", "")).strip().lower()
+            try:
+                left = int(str(rec.get("Осталось дней", "0")).strip() or "0")
+            except Exception:
+                left = 0
+            if status == "активна" and left > 0:
+                rec["_row_index"] = i + 1  # 1-based
+                items.append(rec)
+        return items
+
+    def get_user_active_subscription(self, user_id: int) -> Optional[dict]:
+        """Return the first active subscription for a given user, or None."""
+        ws = self.ws_subscriptions()
+        values = ws.get_all_values()
+        if not values:
+            return None
+        headers = values[0]
+        for i in range(1, len(values)):
+            row = values[i]
+            rec = {headers[j]: (row[j] if j < len(row) else "") for j in range(len(headers))}
+            uid = str(rec.get("user_id", "")).strip()
+            status = str(rec.get("Статус", "")).strip().lower()
+            try:
+                left = int(str(rec.get("Осталось дней", "0")).strip() or "0")
+            except Exception:
+                left = 0
+            if uid == str(user_id) and status == "активна" and left > 0:
+                rec["_row_index"] = i + 1
+                return rec
+        return None
+
+    def get_user_subscription_history(self, user_id: int) -> List[dict]:
+        """Return all subscriptions (any status) for a given user, newest first."""
+        ws = self.ws_subscriptions()
+        values = ws.get_all_values()
+        if not values:
+            return []
+        headers = values[0]
+        items: List[dict] = []
+        for i in range(1, len(values)):
+            row = values[i]
+            rec = {headers[j]: (row[j] if j < len(row) else "") for j in range(len(headers))}
+            uid = str(rec.get("user_id", "")).strip()
+            if uid == str(user_id):
+                items.append(rec)
+        items.reverse()  # newest first
+        return items
+
+    def decrement_subscription_day(self, row_index: int) -> int:
+        ws = self.ws_subscriptions()
+        headers = ws.row_values(1)
+        left_col = headers.index("Осталось дней") + 1
+        val = ws.cell(row_index, left_col).value
+        try:
+            left = int(str(val).strip() or "0")
+        except Exception:
+            left = 0
+        new_left = max(0, left - 1)
+        ws.update_cell(row_index, left_col, new_left)
+        if new_left == 0:
+            self.complete_subscription(row_index)
+        return new_left
+
+    def complete_subscription(self, row_index: int):
+        ws = self.ws_subscriptions()
+        headers = ws.row_values(1)
+        status_col = headers.index("Статус") + 1
+        ws.update_cell(row_index, status_col, "завершена")
+
+    def append_poll_answer(self, date_str: str, chat_id: int, name: str, username: str, question: str, answer: str):
+        ws = self.ws_polls()
+        ws.append_row(
+            [date_str, str(chat_id), name, username, question, answer],
+            value_input_option="USER_ENTERED",
+        )
+
 
 _sheets_client: Optional[GoogleSheetsClient] = None
 
@@ -245,7 +377,42 @@ async def sheets_get_week_menu(start_day_str: str, days: int = 7) -> List[Dict[s
 
 
 async def sheets_get_all_client_ids() -> List[int]:
-    return await asyncio.to_thread(get_sheets_client().get_all_client_chat_ids)
+    try:
+        return await asyncio.to_thread(get_sheets_client().get_all_client_chat_ids)
+    except Exception:
+        # Мягкий фоллбэк при временных сетевых сбоях/ошибках доступа к Sheets
+        return []
+
+
+async def sheets_append_subscription(
+    user_id: int, name: str, phone: str, tariff: str, address: str, timeslot: str,
+    days: int, total_price: int, payment_label: str
+):
+    date_str = now_msk_str()
+    await asyncio.to_thread(
+        get_sheets_client().append_subscription,
+        date_str, user_id, name, phone, tariff, address, timeslot, days, days, total_price, payment_label, "активна"
+    )
+
+
+async def sheets_get_active_subscriptions() -> List[dict]:
+    return await asyncio.to_thread(get_sheets_client().get_active_subscriptions)
+
+
+async def sheets_get_user_active_sub(user_id: int) -> Optional[dict]:
+    return await asyncio.to_thread(get_sheets_client().get_user_active_subscription, user_id)
+
+
+async def sheets_get_user_sub_history(user_id: int) -> List[dict]:
+    return await asyncio.to_thread(get_sheets_client().get_user_subscription_history, user_id)
+
+
+async def sheets_decrement_subscription_day(row_index: int) -> int:
+    return await asyncio.to_thread(get_sheets_client().decrement_subscription_day, row_index)
+
+
+async def sheets_complete_subscription(row_index: int):
+    await asyncio.to_thread(get_sheets_client().complete_subscription, row_index)
 
 
 async def sheets_append_overorder(user_id: int, name: str, phone: str, dish: str):
@@ -271,6 +438,19 @@ async def sheets_append_order(
     await asyncio.to_thread(
         get_sheets_client().append_order,
         date_str, user_id, name, phone, dish, tariff, address, timeslot, qty, payment_label
+    )
+
+async def sheets_append_poll_answer(
+    chat_id: int,
+    name: str,
+    username: str,
+    question: str,
+    answer: str,
+):
+    date_str = now_msk_str()
+    await asyncio.to_thread(
+        get_sheets_client().append_poll_answer,
+        date_str, chat_id, name, username, question, answer
     )
 
 

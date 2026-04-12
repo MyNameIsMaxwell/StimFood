@@ -3,12 +3,13 @@ import re
 from aiogram import Router, F
 from aiogram.types import Message, ContentType, ReplyKeyboardRemove
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app import fsm, bot
-from app.config import ADMIN_CHAT_ID
-from app.keyboards import kb_send_contact, kb_choose_time
+from app.config import ADMIN_IDS, is_admin
+from app.keyboards import kb_send_contact, kb_choose_time, kb_sub_choose_time
 from app.services import send_today_menu, h, _show_confirm
-from app.sheets import sheets_add_client, sheets_find_client
+from app.sheets import sheets_add_client
 from app.utils import normalize_phone
 
 router = Router()
@@ -22,30 +23,57 @@ async def text_handler(message: Message):
     uid = user.id
     state = await fsm.get_state(uid)
 
+    # --- Poll creation flow (admin only) ---
+    if is_admin(uid) and state == "poll_awaiting_question":
+        question = (message.text or "").strip()
+        if len(question) < 3:
+            return await message.answer("Вопрос слишком короткий. Введите вопрос длиннее.")
+        await fsm.update_data(uid, poll_question=question)
+        await fsm.set_state(uid, "poll_awaiting_options")
+        await message.answer("Теперь отправьте варианты ответов, каждый на новой строке (минимум 2, максимум 10).")
+        return
+
+    if is_admin(uid) and state == "poll_awaiting_options":
+        raw = (message.text or "").strip()
+        options = [o.strip() for o in raw.splitlines() if o.strip()]
+        if len(options) < 2 or len(options) > 10:
+            return await message.answer("Нужно от 2 до 10 вариантов. Отправьте список ещё раз.")
+        data = await fsm.get_data(uid)
+        question = data.get("poll_question", "")
+        await fsm.update_data(uid, poll_options=options)
+        kb = InlineKeyboardBuilder()
+        kb.button(text="📨 Отправить опрос всем", callback_data="poll_send")
+        kb.button(text="✖️ Отменить", callback_data="poll_cancel")
+        kb.adjust(1, 1)
+        preview = "<b>Превью опроса</b>:\n\n" + h(question) + "\n\n" + "\n".join(f"• {h(o)}" for o in options)
+        await message.answer(preview, reply_markup=kb.as_markup(), parse_mode="HTML")
+        return
+
+    # --- Support: user sends a message to operators ---
     if state == "awaiting_support_message":
-        if ADMIN_CHAT_ID:
-            from aiogram.utils.keyboard import InlineKeyboardBuilder
-            kb = InlineKeyboardBuilder()
-            kb.button(text="Ответить", callback_data=f"support_reply:{uid}")
-            admin_text = (
-                f"📬 <b>Новое сообщение от пользователя</b>\n"
-                f"ID: <code>{uid}</code>\n"
-                f"Username: @{user.username or '-'}\n"
-                f"Имя: {h(user.full_name or '-')}\n\n"
-                f"{h(message.text)}"
-            )
+        kb = InlineKeyboardBuilder()
+        kb.button(text="Ответить", callback_data=f"support_reply:{uid}")
+        admin_text = (
+            f"📬 <b>Новое сообщение от пользователя</b>\n"
+            f"ID: <code>{uid}</code>\n"
+            f"Username: @{user.username or '-'}\n"
+            f"Имя: {h(user.full_name or '-')}\n\n"
+            f"{h(message.text)}"
+        )
+        for admin_id in ADMIN_IDS:
             try:
-                await bot.send_message(ADMIN_CHAT_ID, admin_text, reply_markup=kb.as_markup(), parse_mode="HTML")
+                await bot.send_message(admin_id, admin_text, reply_markup=kb.as_markup(), parse_mode="HTML")
             except Exception:
                 pass
         await message.answer("Спасибо! Сообщение передано оператору.")
         await fsm.set_state(uid, "menu")
         return
 
-    if ADMIN_CHAT_ID and uid == ADMIN_CHAT_ID:
-        admin_state = await fsm.get_state(ADMIN_CHAT_ID)
+    # --- Support: admin replies to a user ---
+    if is_admin(uid):
+        admin_state = await fsm.get_state(uid)
         if admin_state == "awaiting_support_reply":
-            data_admin = await fsm.get_data(ADMIN_CHAT_ID)
+            data_admin = await fsm.get_data(uid)
             target = data_admin.get("reply_target")
             if target:
                 try:
@@ -57,9 +85,10 @@ async def text_handler(message: Message):
                     await message.answer("Ответ отправлен пользователю ✅")
                 except Exception:
                     await message.answer("Не удалось отправить ответ пользователю. Возможно, он ещё не начинал диалог с ботом.")
-            await fsm.set_state(ADMIN_CHAT_ID, None)
+            await fsm.set_state(uid, None)
             return
 
+    # --- Registration: awaiting name ---
     if state == "awaiting_name":
         name = (message.text or "").strip()
         if len(name) < 2:
@@ -74,6 +103,7 @@ async def text_handler(message: Message):
         await message.answer("Отлично! Теперь отправь, пожалуйста, номер телефона (или нажми кнопку).", reply_markup=kb)
         return
 
+    # --- Registration: awaiting phone (text) ---
     if state == "awaiting_phone":
         phone = normalize_phone(message.text or "")
         if not phone:
@@ -90,6 +120,7 @@ async def text_handler(message: Message):
         await send_today_menu(message.chat.id, uid)
         return
 
+    # --- Custom address input (regular order) ---
     if state == "awaiting_custom_address":
         addr = message.text.strip()
         if len(addr) < 5:
@@ -101,6 +132,24 @@ async def text_handler(message: Message):
         await message.answer(f"Адрес доставки: <b>{h(addr)}</b>\n\nТеперь выбери время доставки:", reply_markup=kb, parse_mode="HTML")
         return
 
+    # --- Custom address input (subscription) ---
+    if state == "sub_awaiting_custom_address":
+        addr = message.text.strip()
+        if len(addr) < 5:
+            await message.answer("Слишком короткий адрес. Введи адрес подробнее, пожалуйста.")
+            return
+        await fsm.update_data(uid, chosen_address=addr)
+        await fsm.set_state(uid, "sub_choose_time")
+        data = await fsm.get_data(uid)
+        tariff = data.get("chosen_tariff", "")
+        kb = kb_sub_choose_time().as_markup()
+        await message.answer(
+            f"🔥 <b>Умный заказ</b>\nТариф: <b>{h(tariff)}</b>\nАдрес: <b>{h(addr)}</b>\n\nВыбери время доставки:",
+            reply_markup=kb, parse_mode="HTML"
+        )
+        return
+
+    # --- Manual quantity input ---
     if state == "awaiting_qty_manual":
         raw = (message.text or "").strip()
         if not re.fullmatch(r"\d{1,3}", raw) or int(raw) < 1:
@@ -111,6 +160,7 @@ async def text_handler(message: Message):
         await _show_confirm(uid, message)
         return
 
+    # --- Default fallback ---
     if state in (None, "menu", "choose_address", "choose_time", "confirm"):
         await message.answer("Воспользуйся, пожалуйста, кнопками ниже 🙂")
 
@@ -135,4 +185,3 @@ async def contact_handler(message: Message):
     await fsm.update_data(uid, phone=phone)
     await message.answer("Спасибо! Регистрация завершена ✅", reply_markup=ReplyKeyboardRemove())
     await send_today_menu(message.chat.id, uid)
-

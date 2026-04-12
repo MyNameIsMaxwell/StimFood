@@ -4,8 +4,24 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="7ba33961-acf6-4a84-8c61-d1b1ae4c73b2" name="Changes" comment="(add ФИО and timeslot)">
+    <list default="true" id="7ba33961-acf6-4a84-8c61-d1b1ae4c73b2" name="Changes" comment="(change cost of tariff and add 5+1 акция)">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/crm.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/crm.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/fsm.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/fsm.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/handlers/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/handlers/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/handlers/callbacks.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/handlers/callbacks.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/handlers/commands.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/handlers/commands.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/handlers/messages.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/handlers/messages.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/keyboards.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/keyboards.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/sheets.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/sheets.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/tasks.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/tasks.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/fsm.sqlite3" beforeDir="false" afterPath="$PROJECT_DIR$/fsm.sqlite3" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/poll_bot.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -42,17 +58,17 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;Python.bot.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;last_opened_file_path&quot;: &quot;D:/PyCharm 2025.1.1.1/Projects/PythonProject&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;editor.preferences.tabs&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python.bot.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "master",
+    "last_opened_file_path": "D:/PyCharm 2025.1.1.1/Projects/PythonProject",
+    "settings.editor.selected.configurable": "editor.preferences.tabs"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="D:\PyCharm 2025.1.1.1\Projects\PythonProject" />
@@ -190,7 +206,15 @@
       <option name="project" value="LOCAL" />
       <updated>1763899883757</updated>
     </task>
-    <option name="localTasksCounter" value="12" />
+    <task id="LOCAL-00012" summary="(change cost of tariff and add 5+1 акция)">
+      <option name="closed" value="true" />
+      <created>1775418759561</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1775418759561</updated>
+    </task>
+    <option name="localTasksCounter" value="13" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -214,29 +238,30 @@
     <MESSAGE value="(added new tariff)" />
     <MESSAGE value="(switch Gefest to БОНШЕ)" />
     <MESSAGE value="(add ФИО and timeslot)" />
-    <option name="LAST_COMMIT_MESSAGE" value="(add ФИО and timeslot)" />
+    <MESSAGE value="(change cost of tariff and add 5+1 акция)" />
+    <option name="LAST_COMMIT_MESSAGE" value="(change cost of tariff and add 5+1 акция)" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/bot.py</url>
-          <line>1004</line>
+          <line>1003</line>
           <option name="timeStamp" value="2" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/bot.py</url>
-          <line>289</line>
+          <line>288</line>
           <option name="timeStamp" value="6" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/bot.py</url>
-          <line>1816</line>
+          <line>1832</line>
           <option name="timeStamp" value="7" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/bot.py</url>
-          <line>1198</line>
+          <line>1214</line>
           <option name="timeStamp" value="8" />
         </line-breakpoint>
       </breakpoints>

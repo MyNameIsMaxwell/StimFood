@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 from aiogram import Router
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, BotCommand
-from aiogram.enums import ChatAction
+from aiogram.types import Message
 import asyncio
 
 from app import bot, fsm
-from app.config import ADMIN_CHAT_ID
-from app.handlers import __init__  # noqa: F401
+from app.config import is_admin
 from app.services import ensure_registered_and_show_menu, send_today_menu
 from app.sheets import sheets_get_all_client_ids
 
@@ -48,7 +46,7 @@ async def cmd_info(message: Message):
 
 @router.message(Command("send_all"))
 async def admin_broadcast(message: Message):
-    if not ADMIN_CHAT_ID or message.from_user.id != ADMIN_CHAT_ID:
+    if not is_admin(message.from_user.id):
         return await message.answer("Нет прав для рассылки.")
     text_to_send = message.text.partition(" ")[2].strip()
     if not text_to_send:
@@ -67,7 +65,15 @@ async def admin_broadcast(message: Message):
     await message.answer(f"Рассылка завершена.\nУспешно: {sent}\nОшибок: {fail}")
 
 
+@router.message(Command("poll"))
+async def cmd_poll(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        return await message.answer("Нет прав для этой команды.")
+    await fsm.set_state(uid, "poll_awaiting_question")
+    await message.answer("Введите текст вопроса для опроса.")
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     await ensure_registered_and_show_menu(message)
-

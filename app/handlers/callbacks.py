@@ -1,16 +1,20 @@
 # -*- coding: utf-8 -*-
 from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app import fsm, bot
-from app.keyboards import kb_choose_address, kb_choose_time, kb_choose_qty
+from app.keyboards import (
+    kb_choose_address, kb_choose_time, kb_choose_qty,
+    kb_sub_choose_tariff, kb_sub_choose_address, kb_sub_choose_time, kb_sub_choose_days,
+)
 from app.services import (
     show_menu_item,
     send_today_menu,
     format_selection_for_tariff,
     edit_to_text,
+    _show_sub_confirm,
 )
 from app.sheets import (
     sheets_find_client,
@@ -19,6 +23,8 @@ from app.sheets import (
     sheets_get_menu,
     sheets_get_week_menu,
     sheets_append_overorder,
+    sheets_get_user_active_sub,
+    sheets_get_user_sub_history,
 )
 from app.utils import h, now_msk_str, extract_ddmmyyyy, weekday_ru_from_ddmmyyyy, start_of_week_msk_str
 
@@ -261,12 +267,13 @@ async def cb_addr_custom(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("support_reply:"))
 async def cb_support_reply(call: CallbackQuery):
-    from app.config import ADMIN_CHAT_ID
-    if not ADMIN_CHAT_ID or call.from_user.id != ADMIN_CHAT_ID:
+    from app.config import is_admin
+    admin_uid = call.from_user.id
+    if not is_admin(admin_uid):
         return await call.answer("Нет прав", show_alert=True)
     target_user_id = int(call.data.split(":", 1)[1])
-    await fsm.set_state(ADMIN_CHAT_ID, "awaiting_support_reply")
-    await fsm.update_data(ADMIN_CHAT_ID, reply_target=target_user_id)
+    await fsm.set_state(admin_uid, "awaiting_support_reply")
+    await fsm.update_data(admin_uid, reply_target=target_user_id)
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -291,5 +298,280 @@ async def cb_choose_qty(call: CallbackQuery):
     await fsm.update_data(uid, qty=qty)
     from app.services import _show_confirm
     await _show_confirm(uid, call.message)
+    await call.answer()
+
+
+# --------- SUBSCRIPTION STATUS / HISTORY ---------
+
+@router.callback_query(F.data == "sub:status")
+async def cb_sub_status(call: CallbackQuery):
+    uid = call.from_user.id
+    sub = await sheets_get_user_active_sub(uid)
+    if not sub:
+        await call.answer("У тебя нет активной подписки.", show_alert=True)
+        return
+
+    tariff = sub.get("Тариф", "—")
+    address = sub.get("Адрес", "—")
+    timeslot = sub.get("Время", "—")
+    days_total = sub.get("Дней", "—")
+    days_left = sub.get("Осталось дней", "—")
+    date_created = sub.get("Дата оформления", "—")
+    total_price = sub.get("Стоимость", "—")
+    payment = sub.get("Оплата", "—")
+
+    text = (
+        "📋 <b>Активная подписка</b>\n\n"
+        f"• Тариф: <b>{h(tariff)}</b>\n"
+        f"• Адрес: <b>{h(address)}</b>\n"
+        f"• Время: <b>{h(timeslot)}</b>\n"
+        f"• Длительность: <b>{h(str(days_total))} дн.</b>\n"
+        f"• Осталось: <b>{h(str(days_left))} дн.</b>\n"
+        f"• Стоимость: <b>{h(str(total_price))} р</b>\n"
+        f"• Оплата: {h(payment)}\n"
+        f"• Дата оформления: {h(date_created)}"
+    )
+
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="📜 История подписок", callback_data="sub:history"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад к меню", callback_data="show_menu_again"))
+
+    try:
+        await bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    await bot.send_message(call.message.chat.id, text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await call.answer()
+
+
+@router.callback_query(F.data == "sub:history")
+async def cb_sub_history(call: CallbackQuery):
+    uid = call.from_user.id
+    history = await sheets_get_user_sub_history(uid)
+
+    if not history:
+        await call.answer("История подписок пуста.", show_alert=True)
+        return
+
+    lines = []
+    for i, sub in enumerate(history[:10], 1):  # макс. 10 последних
+        status = sub.get("Статус", "—")
+        tariff = sub.get("Тариф", "—")
+        days_total = sub.get("Дней", "—")
+        days_left = sub.get("Осталось дней", "—")
+        date_created = sub.get("Дата оформления", "—")
+        total_price = sub.get("Стоимость", "—")
+
+        status_icon = "✅" if "завершена" in status.lower() else ("🔥" if "активна" in status.lower() else "❌")
+        lines.append(
+            f"{i}. {status_icon} <b>{h(tariff)}</b> — {h(str(days_total))} дн. "
+            f"(осталось {h(str(days_left))})\n"
+            f"   {h(date_created)} • {h(str(total_price))} р • {h(status)}"
+        )
+
+    text = "📜 <b>История подписок</b>\n\n" + "\n\n".join(lines)
+
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⬅️ Назад к меню", callback_data="show_menu_again"))
+
+    try:
+        await call.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    except TelegramBadRequest:
+        try:
+            await bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        await bot.send_message(call.message.chat.id, text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await call.answer()
+
+
+# --------- SUBSCRIPTION FLOW ---------
+
+TARIFF_MAPPING = {
+    "max": "Максимум",
+    "standard_plus": "Стандарт+",
+    "standard_soup": "Стандарт (+суп)",
+    "standard_salad": "Стандарт (+салат)",
+}
+
+SUB_TARIFF_INFO = (
+    "\n\n<b>Тарифы:</b>\n"
+    "• <b>Максимум</b> — горячее, суп, салат, напиток, фирменный соус: <b>16 р/день</b>\n"
+    "• <b>Стандарт+</b>  — горячее, суп, салат: <b>14 р/день</b>\n"
+    "• <b>Стандарт</b> (+суп) — горячее + суп: <b>12 р/день</b>\n"
+    "• <b>Стандарт</b> (+салат) — горячее + салат: <b>12 р/день</b>"
+)
+
+
+@router.callback_query(F.data == "sub:start")
+async def cb_sub_start(call: CallbackQuery):
+    uid = call.from_user.id
+    await fsm.set_state(uid, "sub_choose_tariff")
+    text = "🔥 <b>Умный заказ</b> — подписка на обеды\n\nВыбери тариф:" + SUB_TARIFF_INFO
+    try:
+        await bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    await bot.send_message(call.message.chat.id, text, reply_markup=kb_sub_choose_tariff().as_markup(), parse_mode="HTML")
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sub_tariff:"))
+async def cb_sub_tariff(call: CallbackQuery):
+    uid = call.from_user.id
+    code = call.data.split("sub_tariff:", 1)[1]
+    tariff = TARIFF_MAPPING.get(code, code)
+    await fsm.update_data(uid, chosen_tariff=tariff)
+    await fsm.set_state(uid, "sub_choose_address")
+    text = f"🔥 <b>Умный заказ</b>\nТариф: <b>{h(tariff)}</b>\n\nВыбери адрес доставки:"
+    try:
+        await call.message.edit_text(text, reply_markup=kb_sub_choose_address().as_markup(), parse_mode="HTML")
+    except Exception:
+        await bot.send_message(call.message.chat.id, text, reply_markup=kb_sub_choose_address().as_markup(), parse_mode="HTML")
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sub_addr:"))
+async def cb_sub_addr(call: CallbackQuery):
+    uid = call.from_user.id
+    address = call.data.split("sub_addr:", 1)[1]
+    await fsm.update_data(uid, chosen_address=address)
+    await fsm.set_state(uid, "sub_choose_time")
+    data = await fsm.get_data(uid)
+    tariff = data.get("chosen_tariff", "")
+    text = f"🔥 <b>Умный заказ</b>\nТариф: <b>{h(tariff)}</b>\nАдрес: <b>{h(address)}</b>\n\nВыбери время доставки:"
+    try:
+        await call.message.edit_text(text, reply_markup=kb_sub_choose_time().as_markup(), parse_mode="HTML")
+    except Exception:
+        await bot.send_message(call.message.chat.id, text, reply_markup=kb_sub_choose_time().as_markup(), parse_mode="HTML")
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sub_time:"))
+async def cb_sub_time(call: CallbackQuery):
+    uid = call.from_user.id
+    timeslot = call.data.split("sub_time:", 1)[1]
+    await fsm.update_data(uid, chosen_time=timeslot)
+    await fsm.set_state(uid, "sub_choose_days")
+    data = await fsm.get_data(uid)
+    tariff = data.get("chosen_tariff", "")
+    address = data.get("chosen_address", "")
+    text = (
+        f"🔥 <b>Умный заказ</b>\nТариф: <b>{h(tariff)}</b>\n"
+        f"Адрес: <b>{h(address)}</b>\nВремя: <b>{h(timeslot)}</b>\n\n"
+        "Выбери длительность подписки:"
+    )
+    try:
+        await call.message.edit_text(text, reply_markup=kb_sub_choose_days().as_markup(), parse_mode="HTML")
+    except Exception:
+        await bot.send_message(call.message.chat.id, text, reply_markup=kb_sub_choose_days().as_markup(), parse_mode="HTML")
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sub_days:"))
+async def cb_sub_days(call: CallbackQuery):
+    uid = call.from_user.id
+    days = int(call.data.split("sub_days:", 1)[1])
+    await fsm.update_data(uid, sub_days=days)
+    await fsm.set_state(uid, "sub_confirm")
+    await _show_sub_confirm(uid, call.message)
+    await call.answer()
+
+
+@router.callback_query(F.data == "sub_confirm_cash")
+async def cb_sub_confirm_cash(call: CallbackQuery):
+    from app.services import _finalize_subscription
+    await _finalize_subscription(call, payment_label="подписка: оплата при получении")
+
+
+@router.callback_query(F.data == "sub_confirm_paid")
+async def cb_sub_confirm_paid(call: CallbackQuery):
+    from app.services import _finalize_subscription
+    await _finalize_subscription(call, payment_label="подписка: оплачено онлайн")
+
+
+@router.callback_query(F.data.startswith("sub_back:"))
+async def cb_sub_back(call: CallbackQuery):
+    uid = call.from_user.id
+    target = call.data.split("sub_back:", 1)[1]
+    data = await fsm.get_data(uid)
+
+    if target == "menu":
+        await fsm.set_state(uid, "menu")
+        await show_menu_item(call.message.chat.id, uid, callback_query=call)
+        return
+
+    if target == "tariff":
+        await fsm.set_state(uid, "sub_choose_tariff")
+        text = "🔥 <b>Умный заказ</b> — подписка на обеды\n\nВыбери тариф:" + SUB_TARIFF_INFO
+        try:
+            await call.message.edit_text(text, reply_markup=kb_sub_choose_tariff().as_markup(), parse_mode="HTML")
+        except Exception:
+            await bot.send_message(call.message.chat.id, text, reply_markup=kb_sub_choose_tariff().as_markup(), parse_mode="HTML")
+        await call.answer()
+        return
+
+    if target == "addr":
+        await fsm.set_state(uid, "sub_choose_address")
+        tariff = data.get("chosen_tariff", "")
+        text = f"🔥 <b>Умный заказ</b>\nТариф: <b>{h(tariff)}</b>\n\nВыбери адрес доставки:"
+        try:
+            await call.message.edit_text(text, reply_markup=kb_sub_choose_address().as_markup(), parse_mode="HTML")
+        except Exception:
+            await bot.send_message(call.message.chat.id, text, reply_markup=kb_sub_choose_address().as_markup(), parse_mode="HTML")
+        await call.answer()
+        return
+
+    if target == "time":
+        await fsm.set_state(uid, "sub_choose_time")
+        tariff = data.get("chosen_tariff", "")
+        address = data.get("chosen_address", "")
+        text = f"🔥 <b>Умный заказ</b>\nТариф: <b>{h(tariff)}</b>\nАдрес: <b>{h(address)}</b>\n\nВыбери время доставки:"
+        try:
+            await call.message.edit_text(text, reply_markup=kb_sub_choose_time().as_markup(), parse_mode="HTML")
+        except Exception:
+            await bot.send_message(call.message.chat.id, text, reply_markup=kb_sub_choose_time().as_markup(), parse_mode="HTML")
+        await call.answer()
+        return
+
+    if target == "days":
+        await fsm.set_state(uid, "sub_choose_days")
+        tariff = data.get("chosen_tariff", "")
+        address = data.get("chosen_address", "")
+        timeslot = data.get("chosen_time", "")
+        text = (
+            f"🔥 <b>Умный заказ</b>\nТариф: <b>{h(tariff)}</b>\n"
+            f"Адрес: <b>{h(address)}</b>\nВремя: <b>{h(timeslot)}</b>\n\n"
+            "Выбери длительность подписки:"
+        )
+        try:
+            await call.message.edit_text(text, reply_markup=kb_sub_choose_days().as_markup(), parse_mode="HTML")
+        except Exception:
+            await bot.send_message(call.message.chat.id, text, reply_markup=kb_sub_choose_days().as_markup(), parse_mode="HTML")
+        await call.answer()
+        return
+
+    # fallback
+    await fsm.set_state(uid, "menu")
+    await show_menu_item(call.message.chat.id, uid, callback_query=call)
+
+
+@router.callback_query(F.data == "sub_addr_custom")
+async def cb_sub_addr_custom(call: CallbackQuery):
+    uid = call.from_user.id
+    await fsm.set_state(uid, "sub_awaiting_custom_address")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад", callback_data="sub_back:tariff")
+    try:
+        await call.message.edit_text(
+            "Пожалуйста, введи адрес доставки для подписки одним сообщением.",
+            reply_markup=kb.as_markup()
+        )
+    except Exception:
+        await bot.send_message(
+            call.message.chat.id,
+            "Пожалуйста, введи адрес доставки для подписки одним сообщением.",
+            reply_markup=kb.as_markup()
+        )
     await call.answer()
 

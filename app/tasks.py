@@ -4,6 +4,7 @@ import logging
 from app import bot
 from app.sheets import sheets_get_menu, sheets_get_all_client_ids
 from app.utils import msk_now_dt, now_msk_str, seconds_until_next_930_msk, format_menu_for_broadcast
+from app.services import process_auto_orders
 
 
 async def daily_930_broadcast_task():
@@ -44,3 +45,22 @@ async def daily_930_broadcast_task():
         except Exception:
             await asyncio.sleep(5)
 
+
+async def daily_auto_order_task():
+    """
+    Бесконечный цикл:
+      - по будням после 09:31 МСК обрабатываем автозаказы подписок,
+      - повторяем.
+    """
+    await asyncio.sleep(5)
+    while True:
+        try:
+            # ждём то же окно, что и рассылка меню, но +60 секунд
+            delay = max(0, seconds_until_next_930_msk() + 60)
+            await asyncio.sleep(delay)
+            # Пн-Пт
+            if msk_now_dt().weekday() >= 5:
+                continue
+            await process_auto_orders()
+        except Exception:
+            await asyncio.sleep(5)

@@ -15,7 +15,7 @@ from aiogram.types import (
 import aiohttp
 
 from app import bot, fsm
-from app.config import NOTIFY_IDS
+from app.config import NOTIFY_IDS, TARIFF_PRICES, SUBSCRIPTION_DISCOUNTS, SUBSCRIPTION_PRICING_MODE, SUBSCRIPTION_FREE_DAYS
 from app.crm import crm_send_order
 from app.keyboards import (
     kb_choose_address,
@@ -24,6 +24,8 @@ from app.keyboards import (
     kb_confirm,
     kb_menu_navigation,
     kb_show_menu_again,
+    kb_sub_choose_days,
+    kb_sub_confirm,
 )
 from app.sheets import (
     reserve_portions_for_today,
@@ -36,6 +38,11 @@ from app.sheets import (
     sheets_set_quantity_by_row,
     sheets_append_order,
     sheets_append_overorder,
+    sheets_append_subscription,
+    sheets_get_active_subscriptions,
+    sheets_get_user_active_sub,
+    sheets_get_user_sub_history,
+    sheets_decrement_subscription_day,
 )
 from app.utils import (
     extract_ddmmyyyy,
@@ -227,17 +234,21 @@ async def show_menu_item(
         f"<b>Блюдо дня</b>:\n{h(dish_name)}",
         "",
         "<b>Тарифы:</b>",
-        "• <b>Максимум</b> — горячее, суп, салат, напиток, фирменный соус: <b>15 р</b>",
-        "• <b>Стандарт+</b>  — горячее, суп, салат: <b>13 р</b>",
-        "• <b>Стандарт</b> (+суп) — горячее + суп: <b>11 р</b>",
-        "• <b>Стандарт</b> (+салат) — горячее + салат: <b>11 р</b>",
+        "• <b>Максимум</b> — горячее, суп, салат, напиток, фирменный соус: <b>16 р</b>",
+        "• <b>Стандарт+</b>  — горячее, суп, салат: <b>14 р</b>",
+        "• <b>Стандарт</b> (+суп) — горячее + суп: <b>12 р</b>",
+        "• <b>Стандарт</b> (+салат) — горячее + салат: <b>12 р</b>",
         ""
     ]
     if qty:
         caption_lines.append(f"Доступно: {h(qty)}")
     text_or_caption = "\n".join(caption_lines)
     can_switch = len(menu) > 1
-    kb = kb_menu_navigation(can_switch=can_switch, include_tariffs=True).as_markup()
+
+    # Проверяем, есть ли активная подписка у пользователя
+    active_sub = await sheets_get_user_active_sub(user_id)
+    has_active_sub = active_sub is not None
+    kb = kb_menu_navigation(can_switch=can_switch, include_tariffs=True, has_active_sub=has_active_sub).as_markup()
 
     if not callback_query:
         try:
@@ -322,12 +333,26 @@ async def _show_confirm(uid: int, msg: Message):
     qty = int(data.get("qty", 1))
     pay_url = "https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-6599530393354040.005802BY5913UNP_2918581506007Belarus6304D87F"
     kb = kb_confirm(payment_url=pay_url).as_markup()
+
+    # Расчёт стоимости по тарифу и количеству (с учётом акции 5+1)
+    t = (tariff or "").lower()
+    if "максимум" in t:
+        unit_price = 16
+    elif "стандарт+" in t:
+        unit_price = 14
+    elif "суп" in t or "салат" in t:
+        unit_price = 12
+    else:
+        unit_price = 0
+    billable_qty = 5 if qty == 6 else qty
+    total_price = unit_price * billable_qty if unit_price else 0
     text = (
         "Проверь заказ:\n"
         f"• Тариф: <b>{h(tariff)}</b>\n"
         f"• Адрес: <b>{h(address)}</b>\n"
         f"• Время: <b>{h(timeslot)}</b>\n"
-        f"• Количество: <b>{qty}</b>\n\n"
+        f"• Количество: <b>{qty}</b>\n"
+        f"• Стоимость: <b>{total_price} р</b>\n\n"
         "Подтвердить заказ?"
     )
     try:
@@ -336,6 +361,152 @@ async def _show_confirm(uid: int, msg: Message):
         await msg.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
+def _calc_subscription_total(tariff: str, days: int) -> int:
+    price = TARIFF_PRICES.get(str(tariff), 0)
+    d = int(days)
+    if SUBSCRIPTION_PRICING_MODE == "free_days":
+        free = int(SUBSCRIPTION_FREE_DAYS.get(d, 0))
+        billable_days = max(1, d - free)
+        return int(price * billable_days)
+    # default: percent discounts
+    discount = float(SUBSCRIPTION_DISCOUNTS.get(d, 0.0))
+    total = round(price * d * (1 - discount))
+    return int(total)
+
+
+async def _show_sub_confirm(uid: int, msg: Message):
+    data = await fsm.get_data(uid)
+    tariff = data.get("chosen_tariff", "")
+    address = data.get("chosen_address", "")
+    timeslot = data.get("chosen_time", "")
+    days = int(data.get("sub_days", 5))
+    total_price = _calc_subscription_total(tariff, days)
+    pay_url = "https://pay.raschet.by/#00020132410010by.raschet01074440631101229286-1-6599530393354040.005802BY5913UNP_2918581506007Belarus6304D87F"
+    kb = kb_sub_confirm(payment_url=pay_url).as_markup()
+    text = (
+        "Подписка «Умный заказ»:\n"
+        f"• Тариф: <b>{h(tariff)}</b>\n"
+        f"• Адрес: <b>{h(address)}</b>\n"
+        f"• Время: <b>{h(timeslot)}</b>\n"
+        f"• Длительность: <b>{days} дн.</b>\n"
+        f"• Итого к оплате: <b>{total_price} р</b>🔥\n\n"
+        "Оформить подписку?"
+    )
+    try:
+        await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except TelegramBadRequest:
+        await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def _finalize_subscription(call: CallbackQuery, payment_label: str):
+    user = call.from_user
+    if not user:
+        return
+    uid = user.id
+    data = await fsm.get_data(uid)
+    tariff = data.get("chosen_tariff", "")
+    address = data.get("chosen_address", "")
+    timeslot = data.get("chosen_time", "")
+    days = int(data.get("sub_days", 5))
+    client = await sheets_find_client(uid)
+    if not client:
+        await call.answer("Не найден профиль клиента. Отправь /start для регистрации.", show_alert=True)
+        await fsm.clear(uid)
+        return
+    name = str(client.get("Имя", "")).strip()
+    phone = str(client.get("Номер телефона", "")).strip()
+    total_price = _calc_subscription_total(tariff, days)
+    await sheets_append_subscription(
+        user_id=uid, name=name, phone=phone, tariff=tariff, address=address, timeslot=timeslot,
+        days=days, total_price=total_price, payment_label=payment_label
+    )
+    try:
+        await call.message.edit_text("Спасибо! Подписка оформлена ✅", parse_mode="HTML")
+    except TelegramBadRequest:
+        await bot.send_message(call.message.chat.id, "Спасибо! Подписка оформлена ✅", parse_mode="HTML")
+    await fsm.set_state(uid, "menu")
+    await call.answer()
+
+
+async def process_auto_orders():
+    # Выполняется по будням утром: оформляет заказы по активным подпискам
+    subs = await sheets_get_active_subscriptions()
+    if not subs:
+        return
+    for sub in subs:
+        try:
+            uid = int(str(sub.get("user_id", "")).strip() or "0")
+            tariff = str(sub.get("Тариф", "")).strip()
+            address = str(sub.get("Адрес", "")).strip()
+            timeslot = str(sub.get("Время", "")).strip()
+            days_left = int(str(sub.get("Осталось дней", "0")).strip() or "0")
+            row_index = int(sub.get("_row_index", 0))
+            if not uid or days_left <= 0 or not row_index:
+                continue
+            client = await sheets_find_client(uid)
+            if not client:
+                continue
+            name = str(client.get("Имя", "")).strip()
+            phone = str(client.get("Номер телефона", "")).strip()
+
+            # Используем текущее блюдо дня из меню карточки пользователя
+            today = now_msk_str()
+            menu = await sheets_get_menu(today)
+            if not menu:
+                # уведомление админа/пользователя
+                try:
+                    await bot.send_message(uid, "Сегодня подписка не сработала: меню отсутствует. День не списан.")
+                except Exception:
+                    pass
+                continue
+            # Берём первую позицию как «блюдо дня»
+            dish = str(menu[0].get("Блюда", "")).strip()
+
+            # Проверяем остатки
+            day_marker = now_msk_str()
+            row_index_menu, _ = await sheets_find_menu_row(day_marker, dish)
+            if not row_index_menu:
+                try:
+                    await bot.send_message(uid, "Сегодня подписка не сработала: блюдо не найдено. День не списан.")
+                except Exception:
+                    pass
+                continue
+            qty_available = await sheets_get_quantity_by_row(row_index_menu)
+            if qty_available <= 0:
+                try:
+                    await bot.send_message(uid, "Сегодня подписка не сработала: порции закончились. День не списан.")
+                except Exception:
+                    pass
+                continue
+
+            # Оформляем заказ на 1 порцию под выбранный тариф (сборка блюда по тарифу)
+            picked = format_selection_for_tariff(dish, tariff)
+            try:
+                await sheets_append_order(uid, name, phone, picked, tariff, address, timeslot, 1, "подписка")
+            except Exception:
+                # не списываем день
+                continue
+            try:
+                await crm_send_order(
+                    user_id=uid, name=name, phone=phone, address=address, timeslot=timeslot,
+                    dish=picked, qty=1, payment_label="подписка", tariff=tariff
+                )
+            except Exception:
+                pass
+            # Резерв локально в карточке меню листа (уменьшаем на 1)
+            try:
+                await sheets_set_quantity_by_row(row_index_menu, max(0, qty_available - 1))
+            except Exception:
+                pass
+            # Декремент остатка дней
+            await sheets_decrement_subscription_day(row_index)
+            # Уведомление
+            try:
+                await bot.send_message(uid, f"Подписка: заказ на сегодня оформлен ✅\nАдрес: {h(address)}\nВремя: {h(timeslot)}")
+            except Exception:
+                pass
+        except Exception:
+            continue
 async def _finalize_order(call: CallbackQuery, payment_label: str):
     user = call.from_user
     if not user:
