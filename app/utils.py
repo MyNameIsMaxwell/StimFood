@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import html
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 WEEKDAYS_RU = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
@@ -61,11 +61,11 @@ def weekday_ru_from_ddmmyyyy(s: str) -> str:
 
 
 def now_msk_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone(timedelta(hours=3))).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def msk_now_dt() -> datetime:
-    return datetime.now()
+    return datetime.now(timezone(timedelta(hours=3))).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def start_of_week_msk_dt() -> datetime:
