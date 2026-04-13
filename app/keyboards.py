@@ -137,10 +137,10 @@ def kb_sub_choose_days() -> InlineKeyboardBuilder:
         InlineKeyboardButton(text="5 дней", callback_data="sub_days:5")
     )
     kb.row(
-        InlineKeyboardButton(text="10 дней (9+1 бесплатное)", callback_data="sub_days:10")
+        InlineKeyboardButton(text="10 дней", callback_data="sub_days:10")
     )
     kb.row(
-        InlineKeyboardButton(text="20 дней (18+2 бесплатных)", callback_data="sub_days:20")
+        InlineKeyboardButton(text="20 дней", callback_data="sub_days:20")
     )
 
     kb.row(InlineKeyboardButton(text="Назад", callback_data="sub_back:time"))
