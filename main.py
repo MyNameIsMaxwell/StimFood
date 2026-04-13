@@ -6,7 +6,7 @@ from aiogram.types import BotCommand, MenuButtonCommands
 from app import bot, dp, fsm
 from app.handlers import register_all_handlers
 from app.sheets import get_sheets_client
-from app.tasks import daily_930_broadcast_task
+from app.tasks import daily_930_broadcast_task, daily_auto_order_task
 from app.polls import get_poll_store
 
 
@@ -31,6 +31,7 @@ async def main():
     logging.info("Starting bot...")
     register_all_handlers(dp)
     asyncio.create_task(daily_930_broadcast_task())
+    asyncio.create_task(daily_auto_order_task())
     await on_startup()
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "poll_answer"])
 

@@ -43,6 +43,7 @@ async def daily_930_broadcast_task():
                     pass
                 await asyncio.sleep(0.05)
         except Exception:
+            logging.exception("daily_930_broadcast_task failed")
             await asyncio.sleep(5)
 
 
@@ -63,4 +64,5 @@ async def daily_auto_order_task():
                 continue
             await process_auto_orders()
         except Exception:
+            logging.exception("daily_auto_order_task failed")
             await asyncio.sleep(5)
