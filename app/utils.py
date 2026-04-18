@@ -65,7 +65,7 @@ def now_msk_str() -> str:
 
 
 def msk_now_dt() -> datetime:
-    return datetime.now(timezone(timedelta(hours=3))).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone(timedelta(hours=3))).replace(tzinfo=None)
 
 
 def start_of_week_msk_dt() -> datetime:
@@ -80,7 +80,7 @@ def start_of_week_msk_str() -> str:
 
 def seconds_until_next_930_msk() -> float:
     now = msk_now_dt()
-    target = now.replace(hour=9, minute=31, second=0, microsecond=0)
+    target = now.replace(hour=9, minute=30, second=0, microsecond=0)
     if now >= target:
         target = target + timedelta(days=1)
     return (target - now).total_seconds()

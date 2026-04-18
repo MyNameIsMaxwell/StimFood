@@ -34,8 +34,8 @@ SUBSCRIPTION_DISCOUNTS: dict[int, float] = {
 # Пример: 10 дней -> 1 бесплатно (платим за 9), 20 дней -> 2 бесплатно (платим за 18)
 SUBSCRIPTION_FREE_DAYS: dict[int, int] = {
     5: 0,
-    10: 1,
-    20: 2,
+    10: 0,
+    20: 0,
 }
 
 DB_PATH: str = "fsm.sqlite3"
