@@ -3,3 +3,13 @@
 /curl.txt
 /fsm.sqlite3
 /stimfood-0d85bdd1166d.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual environment
+.venv/
+venv/
