@@ -45,7 +45,12 @@ async def text_handler(message: Message):
         kb.button(text="📨 Отправить опрос всем", callback_data="poll_send")
         kb.button(text="✖️ Отменить", callback_data="poll_cancel")
         kb.adjust(1, 1)
-        preview = "<b>Превью опроса</b>:\n\n" + h(question) + "\n\n" + "\n".join(f"• {h(o)}" for o in options)
+        preview = (
+            "<b>Превью опроса</b> (можно выбрать несколько вариантов):\n\n"
+            + h(question)
+            + "\n\n"
+            + "\n".join(f"• {h(o)}" for o in options)
+        )
         await message.answer(preview, reply_markup=kb.as_markup(), parse_mode="HTML")
         return
 

@@ -7,7 +7,7 @@ from aiohttp import ClientError
 
 from app import bot, fsm
 from app.config import is_admin
-from app.polls import get_poll_store, record_poll_answer
+from app.polls import get_poll_store, record_poll_answers
 from app.sheets import sheets_get_all_client_ids
 
 router = Router()
@@ -57,7 +57,7 @@ async def cb_poll_send(call: CallbackQuery):
                 question=question,
                 options=poll_options,
                 is_anonymous=False,
-                allows_multiple_answers=False
+                allows_multiple_answers=True
             )
             if msg and msg.poll and msg.poll.id:
                 await store.add_poll_id(msg.poll.id, batch_id=batch_id, chat_id=uid)
@@ -81,9 +81,10 @@ async def on_poll_answer(poll_answer: PollAnswer):
     if not ref:
         return
     _, question, options, _ = ref
-    answer_text = ""
-    if selected and 0 <= selected[0] < len(options):
-        answer_text = str(options[selected[0]])
-    if not answer_text:
+    answer_texts: list[str] = []
+    for idx in selected:
+        if isinstance(idx, int) and 0 <= idx < len(options):
+            answer_texts.append(str(options[idx]))
+    if not answer_texts:
         return
-    await record_poll_answer(user.id, question, answer_text)
+    await record_poll_answers(user.id, question, answer_texts)

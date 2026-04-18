@@ -85,18 +85,27 @@ def get_poll_store() -> PollStore:
     return _poll_store
 
 
+async def record_poll_answers(user_id: int, question: str, answers: List[str]):
+    """Append one sheet row per selected option (same date/name/username for each)."""
+    answers = [a.strip() for a in answers if a and str(a).strip()]
+    if not answers:
+        return
+    client = await sheets_find_client(user_id)
+    name = str(client.get("Имя", "")).strip() if client else ""
+    username = str(client.get("Username", "")).strip() if client else ""
+    for answer in answers:
+        await sheets_append_poll_answer(
+            chat_id=user_id,
+            name=name,
+            username=username,
+            question=question,
+            answer=answer,
+        )
+
+
 async def record_poll_answer(user_id: int, question: str, answer: str):
     """
     Resolve name/username from Sheets if available and append answer to \"Опросы\" sheet.
     """
-    client = await sheets_find_client(user_id)
-    name = str(client.get("Имя", "")).strip() if client else ""
-    username = str(client.get("Username", "")).strip() if client else ""
-    await sheets_append_poll_answer(
-        chat_id=user_id,
-        name=name,
-        username=username,
-        question=question,
-        answer=answer,
-    )
+    await record_poll_answers(user_id, question, [answer])
 
