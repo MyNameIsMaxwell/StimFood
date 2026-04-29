@@ -429,85 +429,101 @@ async def _finalize_subscription(call: CallbackQuery, payment_label: str):
     await call.answer()
 
 
-async def process_auto_orders():
-    # Выполняется по будням утром: оформляет заказы по активным подпискам
-    subs = await sheets_get_active_subscriptions()
-    if not subs:
-        return
-    for sub in subs:
+async def _process_one_subscription(sub: Dict[str, Any]) -> bool:
+    """
+    Один проход по подписке: заказ в таблицу, CRM, остатки, списание дня.
+    Возвращает False только если заказ в таблицу не записался или до этого упал доступ к Sheets —
+    тогда подписку можно безопасно повторить без дубля строки заказа.
+    """
+    uid = 0
+    try:
+        uid = int(str(sub.get("user_id", "")).strip() or "0")
+        tariff = str(sub.get("Тариф", "")).strip()
+        address = str(sub.get("Адрес", "")).strip()
+        timeslot = str(sub.get("Время", "")).strip()
+        days_left = int(str(sub.get("Осталось дней", "0")).strip() or "0")
+        row_index = int(sub.get("_row_index", 0))
+        if not uid or days_left <= 0 or not row_index:
+            return True
+        client = await sheets_find_client(uid)
+        if not client:
+            return True
+        name = str(client.get("Имя", "")).strip()
+        phone = str(client.get("Номер телефона", "")).strip()
+
+        today = now_msk_str()
+        menu = await sheets_get_menu(today)
+        if not menu:
+            try:
+                await bot.send_message(uid, "Сегодня подписка не сработала: меню отсутствует. День не списан.")
+            except Exception:
+                pass
+            return True
+        dish = str(menu[0].get("Блюда", "")).strip()
+
+        day_marker = now_msk_str()
+        row_index_menu, _ = await sheets_find_menu_row(day_marker, dish)
+        if not row_index_menu:
+            try:
+                await bot.send_message(uid, "Сегодня подписка не сработала: блюдо не найдено. День не списан.")
+            except Exception:
+                pass
+            return True
+        qty_available = await sheets_get_quantity_by_row(row_index_menu)
+        if qty_available <= 0:
+            try:
+                await bot.send_message(uid, "Сегодня подписка не сработала: порции закончились. День не списан.")
+            except Exception:
+                pass
+            return True
+
+        picked = format_selection_for_tariff(dish, tariff)
         try:
-            uid = int(str(sub.get("user_id", "")).strip() or "0")
-            tariff = str(sub.get("Тариф", "")).strip()
-            address = str(sub.get("Адрес", "")).strip()
-            timeslot = str(sub.get("Время", "")).strip()
-            days_left = int(str(sub.get("Осталось дней", "0")).strip() or "0")
-            row_index = int(sub.get("_row_index", 0))
-            if not uid or days_left <= 0 or not row_index:
-                continue
-            client = await sheets_find_client(uid)
-            if not client:
-                continue
-            name = str(client.get("Имя", "")).strip()
-            phone = str(client.get("Номер телефона", "")).strip()
-
-            # Используем текущее блюдо дня из меню карточки пользователя
-            today = now_msk_str()
-            menu = await sheets_get_menu(today)
-            if not menu:
-                # уведомление админа/пользователя
-                try:
-                    await bot.send_message(uid, "Сегодня подписка не сработала: меню отсутствует. День не списан.")
-                except Exception:
-                    pass
-                continue
-            # Берём первую позицию как «блюдо дня»
-            dish = str(menu[0].get("Блюда", "")).strip()
-
-            # Проверяем остатки
-            day_marker = now_msk_str()
-            row_index_menu, _ = await sheets_find_menu_row(day_marker, dish)
-            if not row_index_menu:
-                try:
-                    await bot.send_message(uid, "Сегодня подписка не сработала: блюдо не найдено. День не списан.")
-                except Exception:
-                    pass
-                continue
-            qty_available = await sheets_get_quantity_by_row(row_index_menu)
-            if qty_available <= 0:
-                try:
-                    await bot.send_message(uid, "Сегодня подписка не сработала: порции закончились. День не списан.")
-                except Exception:
-                    pass
-                continue
-
-            # Оформляем заказ на 1 порцию под выбранный тариф (сборка блюда по тарифу)
-            picked = format_selection_for_tariff(dish, tariff)
-            try:
-                await sheets_append_order(uid, name, phone, picked, tariff, address, timeslot, 1, "подписка")
-            except Exception:
-                # не списываем день
-                continue
-            try:
-                await crm_send_order(
-                    user_id=uid, name=name, phone=phone, address=address, timeslot=timeslot,
-                    dish=picked, qty=1, payment_label="подписка", tariff=tariff
-                )
-            except Exception:
-                pass
-            # Резерв локально в карточке меню листа (уменьшаем на 1)
-            try:
-                await sheets_set_quantity_by_row(row_index_menu, max(0, qty_available - 1))
-            except Exception:
-                pass
-            # Декремент остатка дней
-            await sheets_decrement_subscription_day(row_index)
-            # Уведомление
-            try:
-                await bot.send_message(uid, f"Подписка: заказ на сегодня оформлен ✅\nАдрес: {h(address)}\nВремя: {h(timeslot)}")
-            except Exception:
-                pass
+            await sheets_append_order(uid, name, phone, picked, tariff, address, timeslot, 1, "подписка")
         except Exception:
-            continue
+            logging.exception("sheets_append_order failed for subscription uid=%s", uid)
+            return False
+        try:
+            await crm_send_order(
+                user_id=uid, name=name, phone=phone, address=address, timeslot=timeslot,
+                dish=picked, qty=1, payment_label="подписка", tariff=tariff
+            )
+        except Exception:
+            pass
+        try:
+            await sheets_set_quantity_by_row(row_index_menu, max(0, qty_available - 1))
+        except Exception:
+            logging.exception("sheets_set_quantity_by_row failed for subscription uid=%s", uid)
+        try:
+            await sheets_decrement_subscription_day(row_index)
+        except Exception:
+            logging.exception("sheets_decrement_subscription_day failed for subscription uid=%s", uid)
+        try:
+            await bot.send_message(uid, f"Подписка: заказ на сегодня оформлен ✅\nАдрес: {h(address)}\nВремя: {h(timeslot)}")
+        except Exception:
+            pass
+        return True
+    except Exception:
+        logging.exception("_process_one_subscription failed uid=%s", uid)
+        return False
+
+
+async def process_auto_orders(subs: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """
+    Оформляет заказы по активным подпискам.
+    Если subs не передан — читает лист «Подписки».
+    Возвращает список подписок, по которым заказ не удалось завершить (для повтора).
+    """
+    if subs is None:
+        subs = await sheets_get_active_subscriptions()
+    if not subs:
+        return []
+    failed: List[Dict[str, Any]] = []
+    for sub in subs:
+        ok = await _process_one_subscription(sub)
+        if not ok:
+            failed.append(sub)
+    return failed
 async def _finalize_order(call: CallbackQuery, payment_label: str):
     user = call.from_user
     if not user:

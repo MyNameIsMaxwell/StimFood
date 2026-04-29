@@ -79,8 +79,13 @@ def start_of_week_msk_str() -> str:
 
 
 def seconds_until_next_930_msk() -> float:
+    return seconds_until_next_hhmm_msk(9, 30)
+
+
+def seconds_until_next_hhmm_msk(hour: int, minute: int) -> float:
+    """Секунды до ближайшего момента hour:minute по московскому времени (фиксированный offset +3)."""
     now = msk_now_dt()
-    target = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if now >= target:
         target = target + timedelta(days=1)
     return (target - now).total_seconds()
